@@ -87,6 +87,9 @@ struct PlayerView: View {
             self.player = avPlayer
             avPlayer.play()
         } catch {
+            // The view was dismissed while loading (cancellation surfaces as CancellationError
+            // or URLError.cancelled) — not a real error, so don't show the error overlay.
+            if Task.isCancelled { return }
             self.loadError = error
         }
     }

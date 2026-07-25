@@ -102,6 +102,9 @@ struct HomeView: View {
         do {
             items = try await FeedService().loadHome(accessToken: token)
         } catch {
+            // The view was dismissed while loading (cancellation surfaces as CancellationError
+            // or URLError.cancelled) — not a real error, so don't show a message.
+            if Task.isCancelled { return }
             errorMessage = error.localizedDescription
         }
     }
