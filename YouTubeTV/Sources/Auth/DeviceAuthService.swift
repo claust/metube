@@ -68,6 +68,12 @@ actor DeviceAuthService {
         ])
         let json = try await postForm(url: AppConfig.deviceCodeURL, body: body)
 
+        // The endpoint returns a structured {"error": ...} body for problems like an invalid
+        // client_id; surface that as a clearer, actionable message.
+        if let error = json["error"] as? String {
+            throw DeviceAuthError.oauth(error)
+        }
+
         guard
             let deviceCode = json["device_code"] as? String,
             let userCode = json["user_code"] as? String,

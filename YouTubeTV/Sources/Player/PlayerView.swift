@@ -73,23 +73,34 @@ struct PlayerView: View {
 
     @MainActor
     private func load() async {
+        // Reset state up front so a re-run (e.g. SwiftUI restarting the .task) can't leave a
+        // stale error overlay or a previous player instance around.
+        isLoading = true
+        loadError = nil
+        player = nil
+        defer { isLoading = false }
+
         configureAudioSession()
         do {
             let url = try await StreamService().resolveStreamURL(videoId: video.id)
             let avPlayer = AVPlayer(url: url)
             self.player = avPlayer
-            self.isLoading = false
             avPlayer.play()
         } catch {
             self.loadError = error
-            self.isLoading = false
         }
     }
 
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback)
-        try? session.setActive(true)
+        do {
+            try session.setCategory(.playback)
+            try session.setActive(true)
+        } catch {
+            #if DEBUG
+            print("[PlayerView] AVAudioSession configuration failed: \(error.localizedDescription)")
+            #endif
+        }
     }
 
     private func teardown() {

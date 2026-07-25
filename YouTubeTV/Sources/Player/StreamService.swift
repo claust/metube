@@ -38,9 +38,10 @@ struct StreamService {
         // Playability gate.
         let status = json.string(at: "playabilityStatus/status")
         if status != "OK" {
+            // Only surface a human-readable reason; internal status codes (e.g. LOGIN_REQUIRED)
+            // fall through to the generic friendly message instead of being shown to the user.
             let reason = json.string(at: "playabilityStatus/reason")
                 ?? json.string(at: "playabilityStatus/errorScreen/playerErrorMessageRenderer/reason/simpleText")
-                ?? status
                 ?? ""
             throw StreamError.notPlayable(reason)
         }
