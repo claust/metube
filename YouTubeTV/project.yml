@@ -1,0 +1,36 @@
+name: YouTubeTV
+options:
+  bundleIdPrefix: com.prototype.youtubetv
+  deploymentTarget:
+    tvOS: "18.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "3"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    ASSETCATALOG_COMPILER_APPICON_NAME: ""
+targets:
+  YouTubeTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Sources
+    configFiles:
+      Debug: Config/Secrets.xcconfig
+      Release: Config/Secrets.xcconfig
+    info:
+      path: Sources/Resources/Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        YTInnerTubeAPIKey: $(YT_INNERTUBE_API_KEY)
+        YTOAuthClientID: $(YT_OAUTH_CLIENT_ID)
+        YTOAuthClientSecret: $(YT_OAUTH_CLIENT_SECRET)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.prototype.youtubetv
+        INFOPLIST_KEY_CFBundleDisplayName: YouTube TV
