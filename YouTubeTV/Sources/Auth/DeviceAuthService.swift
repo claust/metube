@@ -172,16 +172,16 @@ actor DeviceAuthService {
     private static let unreservedCharacters = CharacterSet(charactersIn:
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
-    /// Percent-encode form fields per `application/x-www-form-urlencoded`.
+    /// Percent-encode form fields per `application/x-www-form-urlencoded`. Spaces are emitted
+    /// as `+` per the form-encoding convention (a literal `+` is percent-encoded to `%2B` since
+    /// it isn't in the unreserved set, so this replacement is unambiguous).
     private static func formEncode(_ fields: [String: String]) -> String {
-        let allowed = unreservedCharacters
-
+        func encode(_ s: String) -> String {
+            (s.addingPercentEncoding(withAllowedCharacters: unreservedCharacters) ?? s)
+                .replacingOccurrences(of: "%20", with: "+")
+        }
         return fields
-            .map { key, value in
-                let k = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-                let v = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-                return "\(k)=\(v)"
-            }
+            .map { key, value in "\(encode(key))=\(encode(value))" }
             .joined(separator: "&")
     }
 }
