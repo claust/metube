@@ -2,7 +2,8 @@ import Foundation
 import SwiftUI
 
 /// Holds the OAuth tokens and login state. Injected as an @EnvironmentObject.
-/// Persists tokens in UserDefaults so login survives app relaunch.
+/// Tokens are persisted in the Keychain (not UserDefaults) so login survives relaunch
+/// without keeping long-lived credentials in plaintext preferences.
 @MainActor
 final class AuthStore: ObservableObject {
     @Published private(set) var accessToken: String?
@@ -14,29 +15,30 @@ final class AuthStore: ObservableObject {
     var isLoggedIn: Bool { accessToken != nil }
 
     init() {
-        accessToken = UserDefaults.standard.string(forKey: accessKey)
-        refreshToken = UserDefaults.standard.string(forKey: refreshKey)
+        accessToken = KeychainStore.get(accessKey)
+        refreshToken = KeychainStore.get(refreshKey)
     }
 
     func setTokens(access: String, refresh: String?) {
         accessToken = access
-        UserDefaults.standard.set(access, forKey: accessKey)
+        KeychainStore.set(access, for: accessKey)
+        // A refresh response may omit refresh_token; keep the existing one when so (per OAuth).
         if let refresh {
             refreshToken = refresh
-            UserDefaults.standard.set(refresh, forKey: refreshKey)
+            KeychainStore.set(refresh, for: refreshKey)
         }
     }
 
     /// Update only the access token (e.g. after a refresh) keeping the refresh token.
     func updateAccessToken(_ access: String) {
         accessToken = access
-        UserDefaults.standard.set(access, forKey: accessKey)
+        KeychainStore.set(access, for: accessKey)
     }
 
     func logout() {
         accessToken = nil
         refreshToken = nil
-        UserDefaults.standard.removeObject(forKey: accessKey)
-        UserDefaults.standard.removeObject(forKey: refreshKey)
+        KeychainStore.delete(accessKey)
+        KeychainStore.delete(refreshKey)
     }
 }

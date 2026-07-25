@@ -1,10 +1,12 @@
 import Foundation
 
 enum InnerTubeError: LocalizedError {
+    case invalidURL
     case badResponse(Int)
     case notJSON
     var errorDescription: String? {
         switch self {
+        case .invalidURL: return "Could not build a valid InnerTube request URL"
         case .badResponse(let code): return "InnerTube request failed (HTTP \(code))"
         case .notJSON: return "InnerTube response was not JSON"
         }
@@ -24,7 +26,10 @@ enum InnerTubeClient {
                      params: [String: Any],
                      bearer: String? = nil) async throws -> [String: Any] {
         let urlString = "\(client.host)/youtubei/v1/\(endpoint)?key=\(AppConfig.innerTubeAPIKey)&prettyPrint=false"
-        var request = URLRequest(url: URL(string: urlString)!)
+        guard let url = URL(string: urlString) else {
+            throw InnerTubeError.invalidURL
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.nameID, forHTTPHeaderField: "X-Youtube-Client-Name")
