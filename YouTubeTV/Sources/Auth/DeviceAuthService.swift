@@ -168,13 +168,13 @@ actor DeviceAuthService {
         throw DeviceAuthError.invalidResponse
     }
 
+    /// RFC 3986 unreserved characters — everything else is percent-encoded.
+    private static let unreservedCharacters = CharacterSet(charactersIn:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
     /// Percent-encode form fields per `application/x-www-form-urlencoded`.
     private static func formEncode(_ fields: [String: String]) -> String {
-        // RFC 3986 unreserved characters — everything else is percent-encoded.
-        var allowed = CharacterSet(charactersIn: "-._~")
-        allowed.insert(charactersIn: "A"..."Z")
-        allowed.insert(charactersIn: "a"..."z")
-        allowed.insert(charactersIn: "0"..."9")
+        let allowed = unreservedCharacters
 
         return fields
             .map { key, value in

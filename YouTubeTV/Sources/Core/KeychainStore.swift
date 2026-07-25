@@ -18,7 +18,18 @@ enum KeychainStore {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        log(status, op: "add", account: account)
+    }
+
+    /// Surface Keychain failures in debug builds; they'd otherwise be silent.
+    private static func log(_ status: OSStatus, op: String, account: String) {
+        #if DEBUG
+        if status != errSecSuccess {
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            print("[KeychainStore] \(op) for \(account) failed: \(message)")
+        }
+        #endif
     }
 
     static func get(_ account: String) -> String? {
