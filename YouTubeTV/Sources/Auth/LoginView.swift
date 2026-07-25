@@ -130,6 +130,7 @@ struct LoginView: View {
 
     // MARK: - Flow control
 
+    @MainActor
     private func startFlow() {
         flowTask?.cancel()
         phase = .requesting

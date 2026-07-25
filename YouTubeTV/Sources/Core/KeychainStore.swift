@@ -8,18 +8,31 @@ enum KeychainStore {
     private static let service = "com.prototype.youtubetv.tokens"
 
     static func set(_ value: String?, for account: String) {
-        // Remove any existing item first so this behaves as an upsert.
-        delete(account)
-        guard let value, let data = value.data(using: .utf8) else { return }
-        let query: [String: Any] = [
+        // A nil value clears the item.
+        guard let value, let data = value.data(using: .utf8) else {
+            delete(account)
+            return
+        }
+        // Identity of the item (without the value/accessibility attributes).
+        let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccount as String: account
         ]
-        let status = SecItemAdd(query as CFDictionary, nil)
-        log(status, op: "add", account: account)
+        // Try to add; if it already exists, update in place. This is atomic — a failed write
+        // never erases the existing credential (unlike delete-then-add).
+        var addQuery = base
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+
+        if addStatus == errSecDuplicateItem {
+            let attributes: [String: Any] = [kSecValueData as String: data]
+            let updateStatus = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+            log(updateStatus, op: "update", account: account)
+        } else {
+            log(addStatus, op: "add", account: account)
+        }
     }
 
     /// Surface Keychain failures in debug builds; they'd otherwise be silent.

@@ -104,13 +104,17 @@ actor DeviceAuthService {
         while true {
             try Task.checkCancellation()
 
-            // Wait one interval before (re)polling — the code isn't ready immediately.
-            try await Task.sleep(nanoseconds: UInt64(currentInterval) * 1_000_000_000)
-            try Task.checkCancellation()
-
-            if Date() >= deadline {
+            // Enforce the cap before sleeping, and clamp the sleep to the time remaining so
+            // we never overshoot `maxPollSeconds` by up to a full interval.
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
                 throw DeviceAuthError.expired
             }
+            let sleepSeconds = min(TimeInterval(currentInterval), remaining)
+
+            // Wait before (re)polling — the code isn't ready immediately.
+            try await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+            try Task.checkCancellation()
 
             let json = try await postForm(url: AppConfig.tokenURL, body: body)
 

@@ -90,6 +90,7 @@ struct HomeView: View {
         .padding(80)
     }
 
+    @MainActor
     private func load() async {
         guard let token = authStore.accessToken else {
             errorMessage = "You're not signed in."

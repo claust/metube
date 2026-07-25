@@ -71,6 +71,7 @@ struct PlayerView: View {
 
     // MARK: - Lifecycle
 
+    @MainActor
     private func load() async {
         configureAudioSession()
         do {
