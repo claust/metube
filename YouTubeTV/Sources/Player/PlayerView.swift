@@ -80,9 +80,10 @@ struct PlayerView: View {
         player = nil
         defer { isLoading = false }
 
-        configureAudioSession()
         do {
             let url = try await StreamService().resolveStreamURL(videoId: video.id)
+            // Only take over audio output once we actually have a playable stream.
+            activateAudioSession()
             let avPlayer = AVPlayer(url: url)
             self.player = avPlayer
             avPlayer.play()
@@ -90,26 +91,32 @@ struct PlayerView: View {
             // The view was dismissed while loading (cancellation surfaces as CancellationError
             // or URLError.cancelled) — not a real error, so don't show the error overlay.
             if Task.isCancelled { return }
+            // A real failure: don't hold the audio session while only an error is shown.
+            deactivateAudioSession()
             self.loadError = error
         }
     }
 
-    private func configureAudioSession() {
+    private func activateAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback)
             try session.setActive(true)
         } catch {
             #if DEBUG
-            print("[PlayerView] AVAudioSession configuration failed: \(error.localizedDescription)")
+            print("[PlayerView] AVAudioSession activation failed: \(error.localizedDescription)")
             #endif
         }
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(false)
     }
 
     private func teardown() {
         player?.pause()
         player = nil
-        try? AVAudioSession.sharedInstance().setActive(false)
+        deactivateAudioSession()
     }
 }
 

@@ -35,6 +35,22 @@ final class AuthStore: ObservableObject {
         KeychainStore.set(access, for: accessKey)
     }
 
+    /// Attempt to obtain a fresh access token using the stored refresh token.
+    /// Returns true on success. On failure the tokens are cleared (logout) so the UI
+    /// returns to the sign-in screen rather than getting stuck in a broken "logged in" state.
+    @discardableResult
+    func refresh() async -> Bool {
+        guard let refreshToken else { return false }
+        do {
+            let tokens = try await DeviceAuthService().refreshTokens(refreshToken: refreshToken)
+            setTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+            return true
+        } catch {
+            logout()
+            return false
+        }
+    }
+
     func logout() {
         accessToken = nil
         refreshToken = nil

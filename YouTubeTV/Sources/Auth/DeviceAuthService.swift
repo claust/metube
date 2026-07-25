@@ -147,6 +147,28 @@ actor DeviceAuthService {
         }
     }
 
+    // MARK: - Step 3: refresh an expired access token
+
+    /// Exchange a refresh token for a fresh access token. The response usually omits a new
+    /// refresh token, in which case the caller keeps the existing one.
+    func refreshTokens(refreshToken: String) async throws -> Tokens {
+        let body = Self.formEncode([
+            "client_id": AppConfig.oauthClientID,
+            "client_secret": AppConfig.oauthClientSecret,
+            "refresh_token": refreshToken,
+            "grant_type": "refresh_token",
+        ])
+        let json = try await postForm(url: AppConfig.tokenURL, body: body)
+
+        if let error = json["error"] as? String {
+            throw DeviceAuthError.oauth(error)
+        }
+        guard let accessToken = json["access_token"] as? String else {
+            throw DeviceAuthError.invalidResponse
+        }
+        return Tokens(accessToken: accessToken, refreshToken: json["refresh_token"] as? String)
+    }
+
     // MARK: - Networking helpers
 
     /// POST an `application/x-www-form-urlencoded` body and return the parsed JSON object.

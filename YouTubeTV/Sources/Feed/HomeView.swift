@@ -105,8 +105,31 @@ struct HomeView: View {
             // The view was dismissed while loading (cancellation surfaces as CancellationError
             // or URLError.cancelled) — not a real error, so don't show a message.
             if Task.isCancelled { return }
+
+            // A likely-expired access token: refresh once and retry. If refresh fails,
+            // AuthStore.refresh() clears the tokens and RootView returns to the Login screen.
+            if isAuthError(error) {
+                guard await authStore.refresh(), let newToken = authStore.accessToken else {
+                    return  // logged out — the router will show Login
+                }
+                do {
+                    items = try await FeedService().loadHome(accessToken: newToken)
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    // fall through to show the error
+                }
+            }
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// An expired/invalid access token surfaces as a 401/403 from InnerTube.
+    private func isAuthError(_ error: Error) -> Bool {
+        guard let inner = error as? InnerTubeError, case .badResponse(let code) = inner else {
+            return false
+        }
+        return code == 401 || code == 403
     }
 }
 
