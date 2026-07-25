@@ -114,4 +114,5 @@ Response (see `reference/samples/player_android.json`):
 ## NOTES / constraints
 - itag 18 caps at 360p — acceptable for the prototype.
 - Age-restricted / login-required videos may not play via the unauth ANDROID client; that's an accepted limitation.
-- `NSAllowsArbitraryLoads` is already enabled in Info.plist (googlevideo.com stream hosts).
+- All endpoints (InnerTube, OAuth, and googlevideo.com stream hosts) are HTTPS, so the app
+  uses the default App Transport Security policy — no ATS exceptions are configured.

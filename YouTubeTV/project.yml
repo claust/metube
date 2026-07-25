@@ -23,6 +23,8 @@ targets:
     info:
       path: Sources/Resources/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         YTInnerTubeAPIKey: $(YT_INNERTUBE_API_KEY)

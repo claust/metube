@@ -5,7 +5,8 @@ import Foundation
 enum AppConfig {
     /// Reads a value injected into Info.plist from `Config/Secrets.xcconfig` at build time.
     /// Returns "" when the key is absent (e.g. the xcconfig wasn't set up) so the app still
-    /// builds; API calls will then fail with a clear error. See `Config/Secrets.example.xcconfig`.
+    /// builds; API calls then fail at runtime — typically a 4xx from YouTube surfaced as an
+    /// `InnerTubeError.badResponse`. See `Config/Secrets.example.xcconfig`.
     private static func secret(_ key: String) -> String {
         (Bundle.main.object(forInfoDictionaryKey: key) as? String) ?? ""
     }
