@@ -186,8 +186,11 @@ struct LoginView: View {
 
     // MARK: - QR generation
 
+    /// Shared across renders — creating a CIContext is expensive.
+    private static let ciContext = CIContext()
+
     private func qrImage(for string: String) -> UIImage? {
-        let context = CIContext()
+        let context = Self.ciContext
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)
         filter.correctionLevel = "M"

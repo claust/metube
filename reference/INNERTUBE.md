@@ -1,7 +1,8 @@
 # InnerTube reference (distilled from SmartTube) — prototype cheatsheet
 
 This is the minimal, verified subset needed for the tvOS prototype. All facts below were
-confirmed with live requests on 2026-07-26 (see `reference/samples/*.json`).
+confirmed with live requests on 2026-07-26. (Raw sample responses are intentionally not
+committed — they contain session-correlated identifiers like `visitorData`/`feedbackToken`.)
 
 ## Base
 
@@ -71,8 +72,7 @@ Authenticated InnerTube calls add header: `Authorization: Bearer {access_token}`
 
 ## HOME feed — `browse` with `"browseId":"default"` (TVHTML5 client + Bearer token)
 
-Response path to video cells (see `reference/samples/browse_home.json` for the unauth shape —
-signed-in adds the shelves/tiles):
+Response path to video cells (the signed-in response nests shelves/tiles under this same path):
 
 ```
 contents.tvBrowseRenderer
@@ -101,7 +101,7 @@ A robust approach: recursively find all `tileRenderer` objects anywhere in the t
 {"context":{"client":{"clientName":"ANDROID","clientVersion":"21.26.364","androidSdkVersion":30,"osName":"Android","osVersion":"11","hl":"en","gl":"US"}},
  "videoId":"<id>","contentCheckOk":true,"racyCheckOk":true}
 ```
-Response (see `reference/samples/player_android.json`):
+Response:
 - `playabilityStatus.status` must be `OK` (else `LOGIN_REQUIRED`/`UNPLAYABLE` → show error, cannot play).
 - `streamingData.formats[*]` — progressive (muxed audio+video) formats.
   **itag 18** = 360p MP4 (H.264 + AAC) and comes with a **direct `url`** field, **no `signatureCipher`,
