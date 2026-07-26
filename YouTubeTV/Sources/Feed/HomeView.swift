@@ -118,12 +118,6 @@ struct HomeView: View {
 
     @MainActor
     private func load() async {
-        #if DEBUG
-        if MockFeed.isEnabled {
-            sections = MockFeed.sections
-            return
-        }
-        #endif
         guard authStore.accessToken != nil else {
             errorMessage = "You're not signed in."
             return
