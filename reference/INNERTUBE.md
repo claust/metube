@@ -94,25 +94,60 @@ Parsing MUST be defensive: walk recursively and collect every `tileRenderer` tha
 `watchEndpoint.videoId`, rather than relying on the exact nesting (nesting varies by row type).
 A robust approach: recursively find all `tileRenderer` objects anywhere in the tree.
 
-## PLAYBACK — `player` (ANDROID client, unauthenticated)
+## PLAYBACK — `player` (VISIONOS client, unauthenticated)
 
-`POST https://youtubei.googleapis.com/youtubei/v1/player?key=...` body:
+`POST https://www.youtube.com/youtubei/v1/player?key=...` body:
 ```json
-{"context":{"client":{"clientName":"ANDROID","clientVersion":"21.26.364","androidSdkVersion":30,"osName":"Android","osVersion":"11","hl":"en","gl":"US"}},
+{"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","clientScreen":"WATCH",
+ "userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+ "deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471",
+ "hl":"en","gl":"US","visitorData":"<token>"}},
  "videoId":"<id>","contentCheckOk":true,"racyCheckOk":true}
 ```
+Headers: `X-Youtube-Client-Name: 101`, `X-Youtube-Client-Version: 1.02`, `X-Goog-Visitor-Id: <token>`,
+matching `User-Agent`, `Referer: https://www.youtube.com/tv`.
+
+**`visitorData` is the only extra requirement** — VERIFIED 2026-07-26. Without it the response is
+`LOGIN_REQUIRED` with no `streamingData`; with it alone the full ladder comes back. No PO token, no
+`signatureTimestamp`, no `playbackContext`, no JS engine. Scrape it from the bootstrap JSON of
+`https://www.youtube.com/tv?bpctr=9999999999&has_verified=1` (send the TV user agent and
+`Cookie: SOCS=CAE=` to skip the consent interstitial), regex `"visitorData":"(.*?)"`, then cache it.
+The `?key=` query param is optional; the host may be `www.youtube.com` or `youtubei.googleapis.com`.
+
 Response:
-- `playabilityStatus.status` must be `OK` (else `LOGIN_REQUIRED`/`UNPLAYABLE` → show error, cannot play).
-- `streamingData.formats[*]` — progressive (muxed audio+video) formats.
-  **itag 18** = 360p MP4 (H.264 + AAC) and comes with a **direct `url`** field, **no `signatureCipher`,
-  no `n` throttle param** → play it directly in AVPlayer. VERIFIED unthrottled.
-- Strategy: from `streamingData.formats`, pick the format with `itag == 18` (or any format that has a
-  plain `url` and a muxed mime `video/mp4`), and hand `url` straight to AVPlayer.
-- Do NOT attempt signatureCipher/DASH — prototype uses the muxed itag-18 URL only. If itag 18 is
-  absent or status != OK, surface a friendly "can't play this video" message.
+- `playabilityStatus.status` must be `OK`. Treat `LOGIN_REQUIRED`/`ERROR` as *this client* being
+  gated and fall through to the next client; only other non-OK values are real video-level errors.
+- **`streamingData.hlsManifestUrl`** — a full HLS multivariant playlist, 144p → 2160p60. Hand it
+  straight to `AVPlayer`. This is the whole strategy: AVFoundation does variant selection, ABR and
+  audio for us, and silently ignores the VP9 variants it cannot decode.
+- `streamingData.adaptiveFormats[*]` — 32 video/audio-only formats, all with a plain `url`,
+  **no `signatureCipher` and no `n` throttle param**, and no byte-range restriction (any `Range`,
+  or none, returns 200/206). Not used by the app; see the codec note below for why.
+
+### Why not 4K
+The HLS ladder and the adaptive formats both go to 2160p60, but above 1080p YouTube publishes only
+VP9 (itags 308/315, WebM) and AV1 (itags 400/401, MP4). AVFoundation has no WebM demuxer at all, and
+Apple ships no software AV1 decoder — AV1 hardware decode starts at A17 Pro/M3 while Apple TV 4K
+(gens 1–3) is A10X/A12/A15. **itag 299 / `avc1.64002A` at 1080p60 is the highest resolution any
+shipping Apple TV can decode.** VERIFIED: AVFoundation parses all 17 variants of a 4K video but
+reports empty `codecTypes` for every `vp09` one and settles on 1920x1080 with zero dropped frames.
+(The tvOS Simulator *can* decode 4K AV1 — it borrows the host Mac's decoder — so a green result
+there is not evidence the feature works on device.)
+
+### Fallback client — ANDROID (unauthenticated)
+`POST https://youtubei.googleapis.com/youtubei/v1/player?key=...`, `clientName: ANDROID`,
+`clientVersion: 21.26.364`. Returns muxed **itag 18** (360p MP4, H.264+AAC) with a direct `url`,
+no cipher, no `n` param. Its `adaptiveFormats` are now **SABR-only** (every entry has
+`serverAbrStreamingUrl` and no `url`), so 360p is all this client can give. Kept purely as a
+last resort if the VISIONOS client is ever gated the same way.
+
+Clients confirmed SABR-only or otherwise unusable as of 2026-07-26: `IOS` 21.26.4, `TVHTML5`
+7.x, `ANDROID` 21.26.364. `TVHTML5` 5.20260707 and `TVHTML5_SIMPLY` do return plain URLs, but
+those carry an `n` throttle param and **403 on every request** until it is solved by running
+YouTube's `base.js` — which is exactly why SmartTube embeds a V8 engine. VISIONOS avoids this.
 
 ## NOTES / constraints
-- itag 18 caps at 360p — acceptable for the prototype.
-- Age-restricted / login-required videos may not play via the unauth ANDROID client; that's an accepted limitation.
+- Playback tops out at 1080p60 on real hardware — a codec-availability wall, not a code limit.
+- Age-restricted / login-required videos may not play via the unauth clients; that's an accepted limitation.
 - All endpoints (InnerTube, OAuth, and googlevideo.com stream hosts) are HTTPS, so the app
   uses the default App Transport Security policy — no ATS exceptions are configured.
