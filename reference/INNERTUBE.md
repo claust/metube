@@ -128,6 +128,28 @@ Both verified working on TVHTML5 with the same Bearer token and the same shelf p
 
 Neither response names the feed it came from, so the caller has to supply that heading itself.
 
+## SEARCH — `search` with `"query":"<text>"` (TVHTML5)
+
+Verified 2026-07-26. Works with or without the Bearer token; the app sends it so results are
+personalized. Same `sectionListRenderer` → `shelfRenderer` shape as the feeds: one
+`Search results for <query>` shelf, then themed shelves (`Over 20 minutes`, and auto-generated
+collections). No paging is implemented — the first response already carries ~30 videos.
+
+**The hits are NOT `tileRenderer`s.** A typical response has ~2 tiles (both playlists) and
+~43 `lockupViewModel`s, which is where every actual video lives. This is the newer view-model
+shape and shares no field paths with the renderers:
+
+- videoId: `contentId` (fallback `rendererContext.commandContext.onTap.innertubeCommand.watchEndpoint.videoId`)
+- type filter: `contentType == "LOCKUP_CONTENT_TYPE_VIDEO"` (playlists/channels use the same
+  cell, and their `contentId` is a playlist/channel id — handing one to `/player` 404s)
+- title: `metadata.lockupMetadataViewModel.title.content` — a plain string, no `runs`/`simpleText`
+- channel: `metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0]
+  .metadataParts[0].text.content` (later rows are view count and age)
+- thumbnail(s): `contentImage.thumbnailViewModel.image.sources[*]` — `url`/`width`, like `thumbnails[*]`
+
+Because both shapes turn up in one response, cell parsing collects every known shape in a
+single ordered pass and dedupes, rather than treating one as a fallback for the other.
+
 `tileRenderer` field paths (from SmartTube's TileItem.java):
 - videoId: `onSelectCommand.watchEndpoint.videoId`  (fallback `onSelectCommand.reelWatchEndpoint.videoId`)
 - title: `metadata.tileMetadataRenderer.title` (`.simpleText` or `.runs[*].text`)

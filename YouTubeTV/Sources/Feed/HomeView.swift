@@ -6,6 +6,8 @@ import SwiftUI
 struct HomeView: View {
     /// Called when the user chooses a video. The orchestrator wires this to the player.
     var onSelectVideo: (VideoItem) -> Void
+    /// Called when the user picks the search icon. The orchestrator wires this to `SearchView`.
+    var onOpenSearch: () -> Void
 
     @EnvironmentObject private var authStore: AuthStore
 
@@ -60,22 +62,31 @@ struct HomeView: View {
     private var feedRows: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 48) {
-                HStack {
+                HStack(spacing: 24) {
                     Text("Home")
                         .font(.system(size: 56, weight: .bold))
                         .foregroundStyle(.white)
                     Spacer()
+                    Button(action: onOpenSearch) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.title2.weight(.semibold))
+                    }
+                    // The glyph carries no text, so name it for VoiceOver and the UI tests.
+                    .accessibilityLabel("Search")
                     Button("Sign out") { authStore.logout() }
                         .foregroundStyle(.white)
                 }
-                .padding(.horizontal, HomeMetrics.horizontalInset)
+                .padding(.horizontal, Metrics.horizontalInset)
                 .padding(.top, 20)
+                // Keeps left/right presses inside the header instead of dropping into the
+                // first row, which sits directly beneath it.
+                .focusSection()
 
                 if sections.isEmpty && extraSections.isEmpty {
                     Text("No recommendations found.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, HomeMetrics.horizontalInset)
+                        .padding(.horizontal, Metrics.horizontalInset)
                         .padding(.top, 40)
                 } else {
                     ForEach(sections) { section in
@@ -87,7 +98,7 @@ struct HomeView: View {
                     if isLoadingMore {
                         ProgressView()
                             .tint(.white)
-                            .padding(.horizontal, HomeMetrics.horizontalInset)
+                            .padding(.horizontal, Metrics.horizontalInset)
                     }
 
                     ForEach(extraSections) { section in
@@ -140,7 +151,11 @@ struct HomeView: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            guard let page = try await fetch({ try await FeedService().loadHome(accessToken: $0) }) else {
+            guard
+                let page = try await authStore.authorized({
+                    try await FeedService().loadHome(accessToken: $0)
+                })
+            else {
                 return false  // cancelled or signed out — nothing to show and nothing to report
             }
             sections = page.sections
@@ -201,7 +216,7 @@ struct HomeView: View {
 
         do {
             guard
-                let page = try await fetch({
+                let page = try await authStore.authorized({
                     try await FeedService().loadMore(continuation: token, accessToken: $0)
                 })
             else { return }
@@ -228,39 +243,6 @@ struct HomeView: View {
         }
     }
 
-    /// Runs a feed request, refreshing the access token once on a 401/403 and retrying.
-    /// Returns `nil` when the work was cancelled or the refresh failed (which signs the user
-    /// out — `AuthStore.refresh()` clears the tokens and RootView returns to the Login screen).
-    @MainActor
-    private func fetch<T>(_ request: (String) async throws -> T) async throws -> T? {
-        guard let token = authStore.accessToken else { return nil }
-        do {
-            return try await request(token)
-        } catch {
-            // The view was dismissed while loading — not a real error.
-            if isCancellation(error) { return nil }
-            guard isAuthError(error) else { throw error }
-            guard await authStore.refresh(), let newToken = authStore.accessToken else {
-                return nil  // logged out — the router will show Login
-            }
-            return try await request(newToken)
-        }
-    }
-
-    /// An expired/invalid access token surfaces as a 401/403 from InnerTube.
-    private func isAuthError(_ error: Error) -> Bool {
-        guard let inner = error as? InnerTubeError, case .badResponse(let code) = inner else {
-            return false
-        }
-        return code == 401 || code == 403
-    }
-}
-
-private enum HomeMetrics {
-    /// Matches the tvOS title-safe inset used by the header and every row.
-    static let horizontalInset: CGFloat = 80
-    static let cardWidth: CGFloat = 420
-    static let cardSpacing: CGFloat = 48
 }
 
 /// One shelf: a heading above a horizontally scrolling strip of cards.
@@ -274,16 +256,16 @@ private struct FeedRow: View {
                 Text(section.title)
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, HomeMetrics.horizontalInset)
+                    .padding(.horizontal, Metrics.horizontalInset)
             }
 
             ScrollView(.horizontal) {
-                LazyHStack(spacing: HomeMetrics.cardSpacing) {
+                LazyHStack(spacing: Metrics.cardSpacing) {
                     ForEach(section.items) { item in
                         VideoCard(item: item) { onSelectVideo(item) }
                     }
                 }
-                .padding(.horizontal, HomeMetrics.horizontalInset)
+                .padding(.horizontal, Metrics.horizontalInset)
                 // Room for the focused card to grow without colliding with the heading above.
                 .padding(.vertical, 32)
             }
@@ -292,144 +274,5 @@ private struct FeedRow: View {
         }
         // Keeps left/right movement inside this row instead of jumping to a neighbouring one.
         .focusSection()
-    }
-}
-
-/// A single focusable video thumbnail card.
-private struct VideoCard: View {
-    let item: VideoItem
-    let action: () -> Void
-
-    @FocusState private var isFocused: Bool
-
-    /// Shared by the focus panel and the thumbnail's top corners.
-    private static let cornerRadius: CGFloat = 16
-
-    var body: some View {
-        Button(action: action) {
-            // No spacing or outer padding: the thumbnail runs the full width of the focus
-            // panel and butts against its top and side edges, so focusing genuinely enlarges
-            // the image rather than framing it.
-            VStack(alignment: .leading, spacing: 0) {
-                // A 16:9 box the full width of the card, with the image laid over it and
-                // cropped to fit. Sizing the AsyncImage itself instead would letterbox: the
-                // thumbnails YouTube serves aren't all 16:9 (`hqdefault.jpg` is 4:3 with black
-                // bars baked in), and a fitted image leaves the card's edges showing through.
-                Color.gray.opacity(0.25)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .overlay { thumbnail }
-                    .overlay(alignment: .bottomTrailing) { channelBadge }
-                    // Only the top corners are rounded — the bottom edge meets the caption,
-                    // and matching the panel's radius keeps the two reading as one surface.
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: Self.cornerRadius,
-                            topTrailingRadius: Self.cornerRadius,
-                            style: .continuous
-                        )
-                    )
-
-                caption
-            }
-            // Fix the width here rather than outside the button. A wrapping title reports an
-            // ideal width far wider than the card, and an outer frame doesn't clamp it — the
-            // caption spilled past the thumbnail and dragged the panel out with it.
-            .frame(width: HomeMetrics.cardWidth)
-            // The one focus surface: a soft grey panel behind the whole card, in place of the
-            // white outline and the white plate that used to sit under the caption.
-            .background(
-                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                    .fill(isFocused ? Color(white: 0.86) : Color.clear)
-            )
-        }
-        .buttonStyle(BareButtonStyle())
-        .focusEffectDisabled()
-        .focused($isFocused)
-        .scaleEffect(isFocused ? 1.08 : 1.0)
-        .shadow(color: .black.opacity(isFocused ? 0.6 : 0), radius: 20)
-        .animation(.easeInOut(duration: 0.15), value: isFocused)
-    }
-
-    /// The artwork itself. `scaledToFill` overflows the 16:9 box it sits in; the card's
-    /// `clipShape` trims the overflow.
-    @ViewBuilder
-    private var thumbnail: some View {
-        AsyncImage(url: item.thumbnailURL) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill()
-            case .empty:
-                ProgressView().tint(.white)
-            case .failure:
-                Image(systemName: "play.rectangle")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
-            @unknown default:
-                Color.clear
-            }
-        }
-    }
-
-    /// The channel, tucked into the corner of the thumbnail. Its own dark pill rather than bare
-    /// text — thumbnails are arbitrary images, so nothing else guarantees contrast under it.
-    @ViewBuilder
-    private var channelBadge: some View {
-        if !item.author.isEmpty {
-            Text(item.author)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Color.black.opacity(0.65)))
-                .padding(10)
-        }
-    }
-
-    /// Title, then views and age on a line of their own. Text goes black on focus, against the
-    /// grey panel behind the card — white-on-black beside a lit thumbnail is the hardest thing
-    /// on the row to read.
-    private var caption: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(item.title)
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(isFocused ? .black : .white)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-
-            if !stats.isEmpty {
-                Text(stats)
-                    .font(.caption)
-                    .foregroundStyle(isFocused ? Color.black.opacity(0.6) : Color.white.opacity(0.6))
-                    .lineLimit(1)
-            }
-        }
-        // Room for two title lines plus the stats line, so a short title doesn't shrink the
-        // card below its neighbours and leave the row's focus panels ragged.
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
-    }
-
-    /// "1.2M views · 3 days ago · 21:55", dropping whichever parts the feed didn't supply.
-    private var stats: String {
-        let age = item.publishedAt.flatMap { RelativeTime.string(for: $0) } ?? ""
-        return [item.viewCount, age, item.duration]
-            .filter { !$0.isEmpty }
-            .joined(separator: " · ")
-    }
-}
-
-/// Renders a button as nothing but its label.
-///
-/// Even `.plain` lifts a focused tvOS button onto a system platter — a padded surface, drawn
-/// wider than the card, that also washes the content with a specular highlight. That platter
-/// was the margin around the thumbnail. With this style the card's own grey panel is the whole
-/// focus treatment, so the artwork reaches its edges.
-private struct BareButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
     }
 }
