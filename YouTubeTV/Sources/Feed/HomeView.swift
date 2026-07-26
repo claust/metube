@@ -155,7 +155,8 @@ struct HomeView: View {
     }
 
     /// Fetches Subscriptions and History concurrently and appends them below Home.
-    /// Each feed degrades on its own: one failing leaves the others (and Home) intact.
+    /// Each feed degrades on its own: one failing or being slow leaves the others (and Home)
+    /// unaffected, because rows are published as each feed arrives rather than in one batch.
     @MainActor
     private func loadSupplementaryFeeds(accessToken: String) async {
         let feeds = Feed.allCases.filter { $0 != .home }
@@ -168,12 +169,14 @@ struct HomeView: View {
                     return (feed, page?.sections ?? [])
                 }
             }
-            for await (feed, sections) in group { loaded[feed] = sections }
+            for await (feed, sections) in group {
+                guard !Task.isCancelled else { return }
+                loaded[feed] = sections
+                // Rebuild from `feeds` rather than appending, so rows land in declared order
+                // however the requests finish. A feed still pending contributes nothing yet.
+                extraSections = feeds.flatMap { loaded[$0] ?? [] }
+            }
         }
-
-        guard !Task.isCancelled else { return }
-        // Present them in declared order, not in whichever order the requests finished.
-        extraSections = feeds.flatMap { loaded[$0] ?? [] }
     }
 
     /// In a LazyVStack this runs as a row scrolls into view. Paging starts while there are
