@@ -14,7 +14,9 @@ struct PlayerView: View {
     @State private var loadError: Error?
     @State private var isLoading = true
     @State private var didPlayToEndObserver: NSObjectProtocol?
-    @State private var timeObserver: Any?
+    /// The periodic observer token together with the player it came from: a token is only
+    /// valid for the player that vended it, and `load()` can re-run and build a new one.
+    @State private var timeObserver: (player: AVPlayer, token: Any)?
     #if DEBUG
     @State private var resolutionObservation: NSKeyValueObservation?
     #endif
@@ -163,10 +165,10 @@ struct PlayerView: View {
     /// by the app being killed) still resumes near where it was left.
     @MainActor
     private func observePlaybackPosition(of player: AVPlayer) {
-        removeTimeObserver(from: player)
+        removeTimeObserver()
         let videoId = video.id
         let fallbackDuration = video.durationSeconds ?? 0
-        timeObserver = player.addPeriodicTimeObserver(
+        let token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 5, preferredTimescale: 1),
             queue: .main
         ) { [weak player] time in
@@ -179,12 +181,15 @@ struct PlayerView: View {
                     duration: itemDuration.isFinite ? itemDuration : fallbackDuration)
             }
         }
+        timeObserver = (player, token)
     }
 
+    /// Hands the token back to the player that issued it — passing it to any other instance
+    /// is a crash.
     @MainActor
-    private func removeTimeObserver(from player: AVPlayer) {
+    private func removeTimeObserver() {
         guard let timeObserver else { return }
-        player.removeTimeObserver(timeObserver)
+        timeObserver.player.removeTimeObserver(timeObserver.token)
         self.timeObserver = nil
     }
 
@@ -233,8 +238,10 @@ struct PlayerView: View {
                 videoId: video.id,
                 position: player.currentTime().seconds,
                 duration: duration.isFinite ? duration : (video.durationSeconds ?? 0))
-            removeTimeObserver(from: player)
         }
+        // Unconditionally: the observer belongs to the player, not to its item, so an item
+        // that has gone away must not leave it installed.
+        removeTimeObserver()
         if let didPlayToEndObserver {
             NotificationCenter.default.removeObserver(didPlayToEndObserver)
             self.didPlayToEndObserver = nil
