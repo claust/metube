@@ -2,7 +2,7 @@ import Foundation
 
 /// A single video shown in the feed and passed to the player.
 struct VideoItem: Identifiable, Hashable {
-    let id: String          // YouTube videoId
+    let id: String  // YouTube videoId
     let title: String
     let author: String
     let thumbnailURL: URL?

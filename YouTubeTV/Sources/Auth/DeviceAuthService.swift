@@ -201,8 +201,9 @@ actor DeviceAuthService {
     }
 
     /// RFC 3986 unreserved characters — everything else is percent-encoded.
-    private static let unreservedCharacters = CharacterSet(charactersIn:
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    private static let unreservedCharacters = CharacterSet(
+        charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     /// Percent-encode form fields per `application/x-www-form-urlencoded`. Spaces are emitted
     /// as `+` per the form-encoding convention (a literal `+` is percent-encoded to `%2B` since
@@ -212,7 +213,8 @@ actor DeviceAuthService {
             (s.addingPercentEncoding(withAllowedCharacters: unreservedCharacters) ?? s)
                 .replacingOccurrences(of: "%20", with: "+")
         }
-        return fields
+        return
+            fields
             .map { key, value in "\(encode(key))=\(encode(value))" }
             .joined(separator: "&")
     }

@@ -196,8 +196,9 @@ struct FeedService {
             if let contentType, contentType != "TILE_CONTENT_TYPE_VIDEO" {
                 // Some non-video content types (channels/playlists) still carry endpoints;
                 // only skip when we're sure it's not a video.
-                if contentType.hasPrefix("TILE_CONTENT_TYPE_") &&
-                    (contentType.contains("CHANNEL") || contentType.contains("PLAYLIST")) {
+                if contentType.hasPrefix("TILE_CONTENT_TYPE_")
+                    && (contentType.contains("CHANNEL") || contentType.contains("PLAYLIST"))
+                {
                     continue
                 }
             }
@@ -233,7 +234,8 @@ struct FeedService {
             guard let items = line.value(at: "lineRenderer/items") as? [[String: Any]] else { continue }
             for item in items {
                 if let text = innerTubeText(item.value(at: "lineItemRenderer/text")),
-                   !text.isEmpty {
+                    !text.isEmpty
+                {
                     return text
                 }
             }
@@ -259,11 +261,13 @@ struct FeedService {
             let renderers = findAllRenderers(named: name, in: json)
             for r in renderers {
                 guard let videoId = r["videoId"] as? String, !videoId.isEmpty,
-                      !seen.contains(videoId) else { continue }
+                    !seen.contains(videoId)
+                else { continue }
                 seen.insert(videoId)
 
                 let title = innerTubeText(r["title"]) ?? innerTubeText(r["headline"]) ?? ""
-                let author = innerTubeText(r.value(at: "longBylineText"))
+                let author =
+                    innerTubeText(r.value(at: "longBylineText"))
                     ?? innerTubeText(r.value(at: "shortBylineText"))
                     ?? ""
 

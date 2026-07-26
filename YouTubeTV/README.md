@@ -63,16 +63,34 @@ xcrun devicectl device process launch --device "$DEVICE_ID" dk.delectosoft.metub
 On a free Apple developer account the installed app stops working after 7 days and must be
 reinstalled; a paid membership lasts a year.
 
+## Lint & format
+
+```sh
+brew install swiftlint
+swiftlint lint --quiet --strict            # style rules (.swiftlint.yml)
+xcrun swift-format lint --strict --recursive Sources   # layout (.swift-format)
+xcrun swift-format format -i --recursive Sources       # auto-fix layout
+```
+
+swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces
+everything else. Both run in CI (`.github/workflows/tvos-ci.yml`) with `--strict`,
+so any violation blocks the merge.
+
 ## Structure
 
 - `Sources/Core` — InnerTube client, OAuth token store, models (shared contracts)
 - `Sources/Auth` — OAuth device-activation flow + `LoginView`
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
-- `Sources/Player` — ANDROID `player` stream resolve + `AVPlayerViewController`
+- `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController`
 - `reference/` — distilled InnerTube notes and captured sample responses
 
 ## Scope / limitations
 
-Intentionally minimal: no search, subscriptions, shorts, or ad blocking. Playback is 360p
-(the cipher-free muxed `itag 18` MP4 the ANDROID InnerTube client returns, so no JavaScript
-signature deciphering is needed). Age- or login-restricted videos surface a graceful message.
+Intentionally minimal: no search, subscriptions, shorts, or ad blocking.
+
+Playback uses the HLS multivariant playlist from the VISIONOS InnerTube client, which needs only
+a scraped `visitorData` token — no PO token and no JavaScript signature deciphering. AVFoundation
+handles variant selection and ABR, settling at **1080p60 H.264**. That is the ceiling on real
+hardware: YouTube publishes 1440p/2160p only in VP9 and AV1, and no shipping Apple TV can decode
+either. The ANDROID client (muxed `itag 18`, 360p) remains as a fallback. Age- or login-restricted
+videos surface a graceful message.

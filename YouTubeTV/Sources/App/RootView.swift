@@ -13,9 +13,11 @@ struct RootView: View {
                     selectedVideo = video
                 })
                 .fullScreenCover(item: $selectedVideo) { video in
-                    PlayerView(video: video, onClose: {
-                        selectedVideo = nil
-                    })
+                    PlayerView(
+                        video: video,
+                        onClose: {
+                            selectedVideo = nil
+                        })
                 }
             } else {
                 LoginView()

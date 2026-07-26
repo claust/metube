@@ -11,6 +11,10 @@ struct PlayerView: View {
     @State private var player: AVPlayer?
     @State private var loadError: Error?
     @State private var isLoading = true
+    @State private var didPlayToEndObserver: NSObjectProtocol?
+    #if DEBUG
+    @State private var resolutionObservation: NSKeyValueObservation?
+    #endif
 
     var body: some View {
         ZStack {
@@ -81,10 +85,27 @@ struct PlayerView: View {
         defer { isLoading = false }
 
         do {
-            let url = try await StreamService().resolveStreamURL(videoId: video.id)
+            let stream = try await StreamService().resolveStream(videoId: video.id)
+            // The view may have been dismissed while awaiting the resolved stream; bail out
+            // before taking over audio output or starting playback for a view that's gone.
+            guard !Task.isCancelled else { return }
             // Only take over audio output once we actually have a playable stream.
             activateAudioSession()
-            let avPlayer = AVPlayer(url: url)
+            // Keep CoreMedia's media requests on the same client identity that minted the URL.
+            // AVURLAssetHTTPUserAgentKey is public API (tvOS 16+); the more general
+            // AVURLAssetHTTPHeaderFieldsKey is an undocumented string key, so a typo in it would
+            // silently drop the headers instead of failing to compile.
+            let asset = AVURLAsset(
+                url: stream.url,
+                options: [
+                    AVURLAssetHTTPUserAgentKey: stream.userAgent
+                ])
+            let item = AVPlayerItem(asset: asset)
+            let avPlayer = AVPlayer(playerItem: item)
+            observePlaybackEnd(of: item)
+            #if DEBUG
+            observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
+            #endif
             self.player = avPlayer
             avPlayer.play()
         } catch {
@@ -96,6 +117,43 @@ struct PlayerView: View {
             self.loadError = error
         }
     }
+
+    /// Returns to the home screen automatically once the video finishes playing.
+    @MainActor
+    private func observePlaybackEnd(of item: AVPlayerItem) {
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+        }
+        // Capture onClose explicitly rather than self, which also holds the AVPlayer and
+        // would otherwise be captured just to reach this one closure property.
+        let onClose = onClose
+        didPlayToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            onClose()
+        }
+    }
+
+    #if DEBUG
+    /// Logs the resolution actually being delivered. `presentationSize` is the ground truth —
+    /// for an HLS stream it updates on every ABR variant switch, so this shows the ladder
+    /// climbing rather than just the first variant chosen.
+    @MainActor
+    private func observeDeliveredResolution(of item: AVPlayerItem, adaptive: Bool) {
+        let kind = adaptive ? "HLS" : "progressive"
+        resolutionObservation = item.observe(\.presentationSize, options: [.initial, .new]) { item, _ in
+            let size = item.presentationSize
+            guard size != .zero else { return }
+            let bitrate = item.accessLog()?.events.last?.indicatedBitrate ?? 0
+            print(
+                String(
+                    format: "[PlayerView] %@ delivering %dx%d (indicated %.1f Mbps)",
+                    kind, Int(size.width), Int(size.height), bitrate / 1_000_000))
+        }
+    }
+    #endif
 
     private func activateAudioSession() {
         let session = AVAudioSession.sharedInstance()
@@ -114,6 +172,14 @@ struct PlayerView: View {
     }
 
     private func teardown() {
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+            self.didPlayToEndObserver = nil
+        }
+        #if DEBUG
+        resolutionObservation?.invalidate()
+        resolutionObservation = nil
+        #endif
         player?.pause()
         player = nil
         deactivateAudioSession()

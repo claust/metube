@@ -1,0 +1,63 @@
+# SwiftLint configuration for the YouTubeTV tvOS app.
+# Run locally with `swiftlint` from the `YouTubeTV/` directory (brew install swiftlint).
+# CI runs `swiftlint lint --quiet --strict`, which promotes every warning to an
+# error so any lint violation blocks the merge (not just error-level rules).
+
+included:
+  - Sources
+
+# The generated Xcode project and build output are gitignored, but exclude them
+# defensively so a local lint run never walks into generated sources.
+excluded:
+  - YouTubeTV.xcodeproj
+  - build
+  - build-device
+  - DerivedData
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: true
+  ignores_urls: true
+
+# SwiftUI view bodies and the InnerTube response parsers legitimately run long.
+# Under --strict every violation fails the build, warning-level included, so
+# these ceilings are set high enough that honest length doesn't trip them —
+# they catch runaway growth, not ordinary code.
+type_body_length:
+  warning: 400
+  error: 600
+
+file_length:
+  warning: 600
+  error: 1000
+  ignore_comment_only_lines: true
+
+function_body_length:
+  warning: 80
+  error: 150
+
+identifier_name:
+  # The InnerTube parsing code binds single-letter names in tight `guard let` /
+  # `case let` / tuple-destructuring scopes (`s`, `k`, `v`, `i`) where a longer
+  # name adds nothing. Allow them rather than sprinkling per-line disables.
+  min_length:
+    warning: 1
+    error: 1
+
+disabled_rules:
+  - todo # TODO/FIXME comments are tracked elsewhere, not a lint gate.
+  # Formatting is owned by swift-format (Xcode's bundled tool), so SwiftLint
+  # must not fight its output. swift-format puts the opening brace on its own
+  # line when a function signature wraps, and adds trailing commas to
+  # multi-line collection literals — both deliberate swift-format defaults
+  # that these two rules would otherwise flag.
+  - opening_brace
+  - trailing_comma
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - contains_over_first_not_nil
+  - first_where
+  - toggle_bool
