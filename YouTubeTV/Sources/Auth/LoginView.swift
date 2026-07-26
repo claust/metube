@@ -151,10 +151,9 @@ struct LoginView: View {
                 await MainActor.run {
                     authStore.setTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
                 }
-            } catch is CancellationError {
-                // View disappeared or flow restarted — nothing to show.
             } catch {
-                if Task.isCancelled { return }
+                // View disappeared or flow restarted — nothing to show.
+                if isCancellation(error) { return }
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 phase = .failed(message)
             }

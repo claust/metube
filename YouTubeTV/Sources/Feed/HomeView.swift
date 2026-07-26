@@ -247,15 +247,6 @@ struct HomeView: View {
         }
     }
 
-    /// True when an error only means the work was cancelled — typically the view being
-    /// dismissed mid-load. `Task.isCancelled` alone isn't enough: URLSession reports a
-    /// cancelled request as `URLError.cancelled` (-999), which can surface without the
-    /// enclosing Task being marked cancelled, and would otherwise show the error screen.
-    private func isCancellation(_ error: Error) -> Bool {
-        if Task.isCancelled || error is CancellationError { return true }
-        return (error as? URLError)?.code == .cancelled
-    }
-
     /// An expired/invalid access token surfaces as a 401/403 from InnerTube.
     private func isAuthError(_ error: Error) -> Bool {
         guard let inner = error as? InnerTubeError, case .badResponse(let code) = inner else {

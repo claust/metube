@@ -70,7 +70,9 @@ struct StreamService {
                     }
                 }
             } catch {
-                if Task.isCancelled { throw error }
+                // Cancellation means nobody is waiting for a stream any more: rethrow instead of
+                // burning the next client in the ladder on a request that is already abandoned.
+                if isCancellation(error) { throw error }
                 #if DEBUG
                 print("[StreamService] \(client.name) failed: \(error.localizedDescription)")
                 #endif
