@@ -115,7 +115,8 @@ fi
 
 # $delay and $count are interpolated into the AppleScript below, so constrain
 # them to literal numbers — a stray value would otherwise become script text.
-if ! [[ "$delay" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+# A leading dot is accepted: ".5" is valid AppleScript and a natural thing to type.
+if ! [[ "$delay" =~ ^([0-9]+(\.[0-9]+)?|\.[0-9]+)$ ]]; then
     echo "tvremote: --delay must be a number of seconds (got '$delay')" >&2
     exit 2
 fi
@@ -162,10 +163,18 @@ if [[ -z "$device_name" ]]; then
     exit 1
 fi
 
-# The name is interpolated into the AppleScript below; keep it to characters
-# real device names use so it can't become script syntax.
-if [[ ! "$device_name" =~ ^[A-Za-z0-9\ ().+-]+$ ]]; then
-    echo "tvremote: device name '$device_name' has unexpected characters; pass --udid" >&2
+# The name goes into an AppleScript double-quoted string, so escape the two
+# characters that can break out of one. Everything else — apostrophes, commas,
+# accents — is safe inside the quotes and stays usable for renamed devices.
+device_name_script=${device_name//\\/\\\\}
+device_name_script=${device_name_script//\"/\\\"}
+
+# A newline would still split the generated script across lines, and no real
+# device name has one. Renaming is the only fix here: --udid can't help, since
+# we already resolved this name *from* a UDID.
+if [[ "$device_name" == *$'\n'* ]]; then
+    echo "tvremote: device name contains a newline, which can't be targeted." >&2
+    echo "  Rename it in Xcode > Window > Devices and Simulators." >&2
     exit 1
 fi
 
@@ -194,12 +203,12 @@ tell application "System Events"
         -- separator first, so a device called "Apple TV" doesn't also match the
         -- "Apple TV 4K ..." window; fall back to a plain prefix if Apple ever
         -- changes the separator.
-        set candidates to (every window whose name starts with "$device_name –")
+        set candidates to (every window whose name starts with "$device_name_script –")
         if (count of candidates) is 0 then
-            set candidates to (every window whose name starts with "$device_name")
+            set candidates to (every window whose name starts with "$device_name_script")
         end if
-        if (count of candidates) is 0 then error "no window titled \"$device_name\""
-        if (count of candidates) > 1 then error "several windows match \"$device_name\""
+        if (count of candidates) is 0 then error "no window titled \"$device_name_script\""
+        if (count of candidates) > 1 then error "several windows match \"$device_name_script\""
         perform action "AXRaise" of (item 1 of candidates)
         delay 0.3
         repeat $count times
