@@ -63,6 +63,19 @@ xcrun devicectl device process launch --device "$DEVICE_ID" dk.delectosoft.metub
 On a free Apple developer account the installed app stops working after 7 days and must be
 reinstalled; a paid membership lasts a year.
 
+## Lint & format
+
+```sh
+brew install swiftlint
+swiftlint lint --quiet --strict            # style rules (.swiftlint.yml)
+xcrun swift-format lint --strict --recursive Sources   # layout (.swift-format)
+xcrun swift-format format -i --recursive Sources       # auto-fix layout
+```
+
+swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces
+everything else. Both run in CI (`.github/workflows/tvos-ci.yml`) with `--strict`,
+so any violation blocks the merge.
+
 ## Structure
 
 - `Sources/Core` — InnerTube client, OAuth token store, models (shared contracts)

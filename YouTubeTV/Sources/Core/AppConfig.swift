@@ -25,7 +25,7 @@ enum AppConfig {
 
     // MARK: InnerTube clients
     enum Client {
-        case tv       // personalized feeds — needs Bearer token
+        case tv  // personalized feeds — needs Bearer token
         case android  // playback stream extraction — works unauthenticated
 
         var name: String {
@@ -50,7 +50,11 @@ enum AppConfig {
         var userAgent: String {
             switch self {
             case .tv:
-                return "Mozilla/5.0 (Linux armeabi-v7a; Android 7.1.2; Fire OS 6.0) Cobalt/22.lts.3.306369-gold (unlike Gecko) v8/8.8.278.8-jit gles Starboard/13, Amazon_ATV_mediatek8695_2019/NS6294 (Amazon, AFTMM, Wireless) com.amazon.firetv.youtube/22.3.r2.v66.0"
+                // The TV client's UA has to be reproduced verbatim; it can't be wrapped.
+                // swiftlint:disable line_length
+                return
+                    "Mozilla/5.0 (Linux armeabi-v7a; Android 7.1.2; Fire OS 6.0) Cobalt/22.lts.3.306369-gold (unlike Gecko) v8/8.8.278.8-jit gles Starboard/13, Amazon_ATV_mediatek8695_2019/NS6294 (Amazon, AFTMM, Wireless) com.amazon.firetv.youtube/22.3.r2.v66.0"
+            // swiftlint:enable line_length
             case .android:
                 return "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
             }

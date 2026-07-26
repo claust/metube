@@ -21,10 +21,12 @@ enum InnerTubeClient {
     ///   - client: which InnerTube client identity to use.
     ///   - params: endpoint params merged into the request body (e.g. ["browseId":"default"]).
     ///   - bearer: optional OAuth access token for authenticated calls.
-    static func post(endpoint: String,
-                     client: AppConfig.Client,
-                     params: [String: Any],
-                     bearer: String? = nil) async throws -> [String: Any] {
+    static func post(
+        endpoint: String,
+        client: AppConfig.Client,
+        params: [String: Any],
+        bearer: String? = nil
+    ) async throws -> [String: Any] {
         let urlString = "\(client.host)/youtubei/v1/\(endpoint)?key=\(AppConfig.innerTubeAPIKey)&prettyPrint=false"
         guard let url = URL(string: urlString) else {
             throw InnerTubeError.invalidURL
@@ -46,7 +48,7 @@ enum InnerTubeClient {
             "clientName": client.name,
             "clientVersion": client.version,
             "hl": "en",
-            "gl": "US"
+            "gl": "US",
         ]
         for (k, v) in client.extraClientContext { clientContext[k] = v }
 

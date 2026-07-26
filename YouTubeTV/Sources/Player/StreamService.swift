@@ -30,7 +30,7 @@ struct StreamService {
             params: [
                 "videoId": videoId,
                 "contentCheckOk": true,
-                "racyCheckOk": true
+                "racyCheckOk": true,
             ],
             bearer: nil
         )
@@ -40,21 +40,24 @@ struct StreamService {
         if status != "OK" {
             // Only surface a human-readable reason; internal status codes (e.g. LOGIN_REQUIRED)
             // fall through to the generic friendly message instead of being shown to the user.
-            let reason = json.string(at: "playabilityStatus/reason")
+            let reason =
+                json.string(at: "playabilityStatus/reason")
                 ?? json.string(at: "playabilityStatus/errorScreen/playerErrorMessageRenderer/reason/simpleText")
                 ?? ""
             throw StreamError.notPlayable(reason)
         }
 
         // Progressive (muxed audio+video) formats live under streamingData.formats.
-        let formats = (json.value(at: "streamingData/formats") as? [Any])?
+        let formats =
+            (json.value(at: "streamingData/formats") as? [Any])?
             .compactMap { $0 as? [String: Any] } ?? []
 
         // 1) Prefer itag 18 with a usable url (try every itag-18 entry, not just the first).
         if let url = formats.lazy
             .filter({ intValue($0["itag"]) == 18 })
             .compactMap({ usableURL(from: $0) })
-            .first {
+            .first
+        {
             return url
         }
 
@@ -63,7 +66,8 @@ struct StreamService {
         if let url = formats.lazy
             .filter({ isProgressiveMP4($0) })
             .compactMap({ usableURL(from: $0) })
-            .first {
+            .first
+        {
             return url
         }
 
@@ -74,7 +78,8 @@ struct StreamService {
 
     private func usableURL(from format: [String: Any]) -> URL? {
         guard let s = format["url"] as? String, !s.isEmpty,
-              let url = URL(string: s) else { return nil }
+            let url = URL(string: s)
+        else { return nil }
         return url
     }
 

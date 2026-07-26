@@ -1,0 +1,82 @@
+name: tvOS CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# macOS runner minutes bill at 10x the Linux rate on private repos, so cancel
+# superseded runs rather than stacking expensive macOS jobs.
+concurrency:
+  group: tvos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-build:
+    name: Lint & build
+    # macos-15 carries an Xcode 26 toolchain (the tvOS 26 SDK); the "Select
+    # Xcode 26" step pins the exact version, so this only needs an image that
+    # has a 26.x installed.
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: YouTubeTV
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pin the toolchain to the latest Xcode 26.x rather than a hard-coded
+      # /Applications path, which can break across runner-image updates.
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '~> 26.0'
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep tvOS || true
+
+      # xcbeautify prettifies xcodebuild output in the Build step; install it
+      # explicitly rather than relying on it being preinstalled.
+      - name: Install tooling (XcodeGen + SwiftLint + xcbeautify)
+        run: brew install xcodegen swiftlint xcbeautify
+
+      # Simulator builds need no signing and exercise no YouTube credentials,
+      # so the placeholder values in the example config (gitignored
+      # Secrets.xcconfig is required by project.yml) are enough. No repo
+      # secrets required.
+      - name: Stub Secrets.xcconfig
+        run: cp Config/Secrets.example.xcconfig Config/Secrets.xcconfig
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # --strict promotes every warning to an error so lint warnings block the
+      # merge instead of merely surfacing in the log.
+      - name: SwiftLint
+        run: swiftlint lint --quiet --strict
+
+      # swift-format (bundled with the selected Xcode) owns layout; enforce it
+      # in CI so unformatted code can't merge. Config lives in .swift-format.
+      # --strict fails the job on any formatting drift.
+      - name: swift-format lint
+        run: xcrun swift-format lint --strict --recursive Sources
+
+      # A generic simulator destination compiles for appletvsimulator without
+      # needing a bootable device, so CI never depends on which concrete Apple
+      # TV simulator the runner image ships.
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project YouTubeTV.xcodeproj \
+            -scheme YouTubeTV \
+            -destination 'generic/platform=tvOS Simulator' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify
