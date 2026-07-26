@@ -83,6 +83,51 @@ contents.tvBrowseRenderer
           .tileRenderer      <-- the video cell
 ```
 
+Each `shelfRenderer` is one horizontal row in the UI. Its heading is NOT at
+`headerRenderer.shelfHeaderRenderer.title` on this client — the TV home feed nests it one level
+deeper (verified 2026-07-26):
+
+```
+shelfRenderer.headerRenderer.shelfHeaderRenderer
+  .avatarLockup.avatarLockupRenderer.title   (.runs[*].text — often split across several runs)
+```
+
+A signed-in home response returns ~3–4 shelves of 4–5 tiles each, with titles like
+`Recommended`, `Recently uploaded`, and interest rows such as `Science and more`. The exact
+shelves vary between loads. The same videoId can legitimately appear in two different shelves,
+so dedupe per shelf, not globally.
+
+### Paging home — continuations
+
+The TV feed uses the OLDER continuation style, not `continuationItemRenderer` (verified
+2026-07-26):
+
+```
+sectionListRenderer.continuations[0].nextContinuationData.continuation   <-- next PAGE of shelves
+```
+
+Fetch the next page with `browse` and `{"continuation": "<token>"}` (no `browseId`). The reply
+wraps its shelves in `continuationContents.sectionListContinuation`, which carries the token for
+the page after it; the last page simply omits `continuations`.
+
+Careful: a response contains SEVERAL `nextContinuationData` objects — each shelf has its own for
+scrolling further RIGHT within that row. Read `continuations` directly off the section-list
+container; a recursive search for the renderer name returns a row token and pages the wrong axis.
+
+Home exhausts after ~5 pages / ~16 shelves / ~78 videos for a typical account.
+
+## Other feeds — same `browse` call, different `browseId`
+
+Both verified working on TVHTML5 with the same Bearer token and the same shelf parsing
+(2026-07-26):
+
+- `FEsubscriptions` — ~7 shelves. Opens with `Most relevant` (~14 videos), then several
+  **headerless** shelves of ~3 (their renderer has only `content`/`trackingParams`/
+  `tvhtml5Metadata` — there is no title to find), plus a `Shorts` reel shelf. Paginates.
+- `FEhistory` — a single untitled shelf of ~15 recently watched videos. No continuation.
+
+Neither response names the feed it came from, so the caller has to supply that heading itself.
+
 `tileRenderer` field paths (from SmartTube's TileItem.java):
 - videoId: `onSelectCommand.watchEndpoint.videoId`  (fallback `onSelectCommand.reelWatchEndpoint.videoId`)
 - title: `metadata.tileMetadataRenderer.title` (`.simpleText` or `.runs[*].text`)

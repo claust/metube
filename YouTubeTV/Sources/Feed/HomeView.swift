@@ -1,6 +1,7 @@
+import Foundation
 import SwiftUI
 
-/// The personalized Home feed: a focusable grid of video thumbnails.
+/// The personalized Home feed: one horizontal, focusable row per YouTube shelf.
 /// Selection is delegated to the orchestrator via `onSelectVideo`.
 struct HomeView: View {
     /// Called when the user chooses a video. The orchestrator wires this to the player.
@@ -8,11 +9,25 @@ struct HomeView: View {
 
     @EnvironmentObject private var authStore: AuthStore
 
-    @State private var items: [VideoItem] = []
+    @State private var sections: [FeedSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 48), count: 4)
+    /// Rows from the supplementary feeds (Subscriptions, History). Kept separate from `sections`
+    /// so they stay pinned below Home as it pages, rather than being pushed around by it.
+    @State private var extraSections: [FeedSection] = []
+
+    /// Token for the next page of shelves; `nil` once the feed is exhausted or paging has stopped.
+    @State private var continuation: String?
+    @State private var isLoadingMore = false
+    @State private var pagesLoaded = 0
+
+    /// A backstop on runaway paging — home is effectively endless, and each page costs a
+    /// request plus a screenful of thumbnails.
+    private static let maxPages = 8
+
+    /// Start fetching the next page once a row this close to the end comes into view.
+    private static let prefetchDistance = 2
 
     var body: some View {
         ZStack {
@@ -22,7 +37,7 @@ struct HomeView: View {
         }
         .task {
             // Load once on first appear.
-            if items.isEmpty && !isLoading {
+            if sections.isEmpty && !isLoading {
                 await load()
             }
         }
@@ -38,13 +53,13 @@ struct HomeView: View {
         } else if let errorMessage {
             errorView(errorMessage)
         } else {
-            feedGrid
+            feedRows
         }
     }
 
-    private var feedGrid: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+    private var feedRows: some View {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 48) {
                 HStack {
                     Text("Home")
                         .font(.system(size: 56, weight: .bold))
@@ -53,22 +68,33 @@ struct HomeView: View {
                     Button("Sign out") { authStore.logout() }
                         .foregroundStyle(.white)
                 }
+                .padding(.horizontal, HomeMetrics.horizontalInset)
                 .padding(.top, 20)
 
-                if items.isEmpty {
+                if sections.isEmpty && extraSections.isEmpty {
                     Text("No recommendations found.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, HomeMetrics.horizontalInset)
                         .padding(.top, 40)
                 } else {
-                    LazyVGrid(columns: columns, spacing: 48) {
-                        ForEach(items) { item in
-                            VideoCard(item: item) { onSelectVideo(item) }
-                        }
+                    ForEach(sections) { section in
+                        FeedRow(section: section, onSelectVideo: onSelectVideo)
+                            .onAppear { prefetchIfNeeded(from: section) }
+                    }
+
+                    // Sits between Home and the supplementary feeds, where the next page lands.
+                    if isLoadingMore {
+                        ProgressView()
+                            .tint(.white)
+                            .padding(.horizontal, HomeMetrics.horizontalInset)
+                    }
+
+                    ForEach(extraSections) { section in
+                        FeedRow(section: section, onSelectVideo: onSelectVideo)
                     }
                 }
             }
-            .padding(.horizontal, 80)
             .padding(.vertical, 60)
         }
     }
@@ -92,36 +118,142 @@ struct HomeView: View {
 
     @MainActor
     private func load() async {
-        guard let token = authStore.accessToken else {
+        guard authStore.accessToken != nil else {
             errorMessage = "You're not signed in."
             return
         }
+        guard await loadHomeFirstPage() else { return }
+
+        // The spinner is already gone and Home's shelves are on screen, so a slow
+        // Subscriptions or History request delays only its own rows. Home also just
+        // succeeded, which means the token is good — no need to repeat the refresh dance.
+        if let token = authStore.accessToken {
+            await loadSupplementaryFeeds(accessToken: token)
+        }
+    }
+
+    /// Loads Home's first page. Returns `false` when nothing landed — an error, a cancellation,
+    /// or a sign-out — in which case the caller should not go on to the supplementary feeds.
+    @MainActor
+    private func loadHomeFirstPage() async -> Bool {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
-            items = try await FeedService().loadHome(accessToken: token)
+            guard let page = try await fetch({ try await FeedService().loadHome(accessToken: $0) }) else {
+                return false  // cancelled or signed out — nothing to show and nothing to report
+            }
+            sections = page.sections
+            continuation = page.continuation
+            pagesLoaded = 1
+            return true
         } catch {
-            // The view was dismissed while loading (cancellation surfaces as CancellationError
-            // or URLError.cancelled) — not a real error, so don't show a message.
-            if Task.isCancelled { return }
+            if isCancellation(error) { return false }
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
 
-            // A likely-expired access token: refresh once and retry. If refresh fails,
-            // AuthStore.refresh() clears the tokens and RootView returns to the Login screen.
-            if isAuthError(error) {
-                guard await authStore.refresh(), let newToken = authStore.accessToken else {
-                    return  // logged out — the router will show Login
-                }
-                do {
-                    items = try await FeedService().loadHome(accessToken: newToken)
-                    return
-                } catch {
-                    if Task.isCancelled { return }
-                    // fall through to show the error
+    /// Fetches Subscriptions and History concurrently and appends them below Home.
+    /// Each feed degrades on its own: one failing or being slow leaves the others (and Home)
+    /// unaffected, because rows are published as each feed arrives rather than in one batch.
+    @MainActor
+    private func loadSupplementaryFeeds(accessToken: String) async {
+        let feeds = Feed.allCases.filter { $0 != .home }
+
+        var loaded: [Feed: [FeedSection]] = [:]
+        await withTaskGroup(of: (Feed, [FeedSection]).self) { group in
+            for feed in feeds {
+                group.addTask {
+                    let page = try? await FeedService().loadFeed(feed, accessToken: accessToken)
+                    return (feed, page?.sections ?? [])
                 }
             }
-            errorMessage = error.localizedDescription
+            for await (feed, sections) in group {
+                guard !Task.isCancelled else { return }
+                loaded[feed] = sections
+                // Rebuild from `feeds` rather than appending, so rows land in declared order
+                // however the requests finish. A feed still pending contributes nothing yet.
+                extraSections = feeds.flatMap { loaded[$0] ?? [] }
+            }
         }
+    }
+
+    /// In a LazyVStack this runs as a row scrolls into view. Paging starts while there are
+    /// still rows below, so reaching the bottom doesn't stall on a network round-trip —
+    /// waiting for the genuinely last row would make the delay visible every time.
+    private func prefetchIfNeeded(from section: FeedSection) {
+        // Rows reappear constantly while scrolling, so check the cheap conditions before
+        // spawning a Task that loadMore() would only bail out of anyway.
+        guard continuation != nil, !isLoadingMore, pagesLoaded < Self.maxPages else { return }
+        guard let index = sections.firstIndex(where: { $0.id == section.id }),
+            index >= sections.count - Self.prefetchDistance
+        else { return }
+        Task { await loadMore() }
+    }
+
+    /// Appends the next page of shelves.
+    @MainActor
+    private func loadMore() async {
+        guard let token = continuation, !isLoadingMore, pagesLoaded < Self.maxPages else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        do {
+            guard
+                let page = try await fetch({
+                    try await FeedService().loadMore(continuation: token, accessToken: $0)
+                })
+            else { return }
+
+            pagesLoaded += 1
+            let fresh = newSections(in: page.sections)
+            sections.append(contentsOf: fresh)
+            // If a page adds nothing, stop — the trigger row would otherwise stay last and
+            // refire on every scroll, paging forever with no visible progress.
+            continuation = fresh.isEmpty ? nil : page.continuation
+        } catch {
+            if isCancellation(error) { return }
+            // A failed page shouldn't wipe out the feed already on screen. Give up on paging
+            // and leave what's loaded intact.
+            continuation = nil
+        }
+    }
+
+    /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.
+    private func newSections(in candidates: [FeedSection]) -> [FeedSection] {
+        let shown = Set(sections.flatMap { $0.items.map(\.id) })
+        return candidates.filter { section in
+            !section.items.allSatisfy { shown.contains($0.id) }
+        }
+    }
+
+    /// Runs a feed request, refreshing the access token once on a 401/403 and retrying.
+    /// Returns `nil` when the work was cancelled or the refresh failed (which signs the user
+    /// out — `AuthStore.refresh()` clears the tokens and RootView returns to the Login screen).
+    @MainActor
+    private func fetch<T>(_ request: (String) async throws -> T) async throws -> T? {
+        guard let token = authStore.accessToken else { return nil }
+        do {
+            return try await request(token)
+        } catch {
+            // The view was dismissed while loading — not a real error.
+            if isCancellation(error) { return nil }
+            guard isAuthError(error) else { throw error }
+            guard await authStore.refresh(), let newToken = authStore.accessToken else {
+                return nil  // logged out — the router will show Login
+            }
+            return try await request(newToken)
+        }
+    }
+
+    /// True when an error only means the work was cancelled — typically the view being
+    /// dismissed mid-load. `Task.isCancelled` alone isn't enough: URLSession reports a
+    /// cancelled request as `URLError.cancelled` (-999), which can surface without the
+    /// enclosing Task being marked cancelled, and would otherwise show the error screen.
+    private func isCancellation(_ error: Error) -> Bool {
+        if Task.isCancelled || error is CancellationError { return true }
+        return (error as? URLError)?.code == .cancelled
     }
 
     /// An expired/invalid access token surfaces as a 401/403 from InnerTube.
@@ -130,6 +262,46 @@ struct HomeView: View {
             return false
         }
         return code == 401 || code == 403
+    }
+}
+
+private enum HomeMetrics {
+    /// Matches the tvOS title-safe inset used by the header and every row.
+    static let horizontalInset: CGFloat = 80
+    static let cardWidth: CGFloat = 420
+    static let cardSpacing: CGFloat = 48
+}
+
+/// One shelf: a heading above a horizontally scrolling strip of cards.
+private struct FeedRow: View {
+    let section: FeedSection
+    var onSelectVideo: (VideoItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !section.title.isEmpty {
+                Text(section.title)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, HomeMetrics.horizontalInset)
+            }
+
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: HomeMetrics.cardSpacing) {
+                    ForEach(section.items) { item in
+                        VideoCard(item: item) { onSelectVideo(item) }
+                            .frame(width: HomeMetrics.cardWidth)
+                    }
+                }
+                .padding(.horizontal, HomeMetrics.horizontalInset)
+                // Room for the focused card to grow without colliding with the heading above.
+                .padding(.vertical, 32)
+            }
+            // Without this the focus scale/shadow is cut off at the scroll view's edges.
+            .scrollClipDisabled()
+        }
+        // Keeps left/right movement inside this row instead of jumping to a neighbouring one.
+        .focusSection()
     }
 }
 
