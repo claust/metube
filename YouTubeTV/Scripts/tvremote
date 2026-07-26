@@ -1,0 +1,155 @@
+#!/bin/bash
+#
+# tvremote — drive the Apple TV simulator's Siri Remote from the command line.
+#
+# tvOS has no touch input, and neither `simctl` nor the Claude Code simulator
+# integration can send directional presses: `simctl` has no key/press subcommand,
+# and the MCP server's tvOS screenshot fails outright ("Could not find the Main
+# Screen Surface" — a tvOS device publishes a TVOut display, not a main screen).
+# The one path that works is synthesizing key events to Simulator.app, which maps
+# the arrow keys onto the remote's directional pad.
+#
+# Two behaviours make hand-rolling this error-prone, and are handled below:
+#
+#   1. Activating the Simulator window swallows the first key press, so a cold
+#      invocation silently loses a step.
+#   2. tvOS applies remote *acceleration*: presses arriving in quick succession
+#      are treated as an accelerating scroll, exactly like holding the direction
+#      on a real remote. Two rights 0.5s apart can jump several cards and cross
+#      into the next section. Spacing them out keeps movement one-step-exact.
+#
+# Usage:
+#   tvremote <button> [count] [options]
+#
+#   Buttons:  up down left right select menu playpause
+#   Options:
+#     -s, --shot [PATH]   screenshot after the presses (default: $TMPDIR)
+#     -u, --udid UDID     target device (default: first booted tvOS simulator)
+#     -d, --delay SEC     seconds between presses (default: 1.0)
+#     -h, --help          this text
+#
+# Examples:
+#   tvremote right              # one step right
+#   tvremote down 3             # three steps down, safely spaced
+#   tvremote select --shot      # select, then capture the result
+
+set -euo pipefail
+
+readonly ACTIVATION_SETTLE=0.5   # lets the raised window consume its focus event
+readonly RENDER_SETTLE=0.8       # SwiftUI focus animations before a screenshot
+
+usage() { sed -n '3,30p' "$0" | sed 's|^# \{0,1\}||'; }
+
+key_code_for() {
+    case "$1" in
+        up)        echo 126 ;;
+        down)      echo 125 ;;
+        left)      echo 123 ;;
+        right)     echo 124 ;;
+        select)    echo 36  ;;  # Return
+        menu)      echo 53  ;;  # Escape
+        playpause) echo 49  ;;  # Space
+        *)         return 1 ;;
+    esac
+}
+
+button=""
+count=1
+shot=""
+want_shot=0
+udid=""
+delay=1.0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -s|--shot)
+            want_shot=1
+            # An optional path may follow, but not another flag.
+            if [[ $# -gt 1 && "$2" != -* ]]; then shot="$2"; shift; fi
+            ;;
+        -u|--udid) udid="${2:-}"; shift ;;
+        -d|--delay) delay="${2:-}"; shift ;;
+        -*) echo "tvremote: unknown option '$1'" >&2; exit 2 ;;
+        *)
+            if [[ -z "$button" ]]; then button="$1"
+            elif [[ "$1" =~ ^[0-9]+$ ]]; then count="$1"
+            else echo "tvremote: unexpected argument '$1'" >&2; exit 2
+            fi
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$button" ]]; then usage; exit 2; fi
+
+if ! code=$(key_code_for "$button"); then
+    echo "tvremote: unknown button '$button' (up down left right select menu playpause)" >&2
+    exit 2
+fi
+
+if [[ "$count" -lt 1 ]]; then
+    echo "tvremote: count must be at least 1" >&2
+    exit 2
+fi
+
+# Resolve the target device. Without a UDID, take the first booted tvOS simulator.
+if [[ -z "$udid" ]]; then
+    udid=$(xcrun simctl list devices booted 2>/dev/null \
+        | awk '/^-- tvOS/{tv=1; next} /^--/{tv=0} tv && match($0, /\(([0-9A-F-]{36})\)/) {
+                 print substr($0, RSTART+1, RLENGTH-2); exit }')
+fi
+
+if [[ -z "$udid" ]]; then
+    echo "tvremote: no booted tvOS simulator found. Boot one first:" >&2
+    echo "  xcrun simctl boot 'Apple TV 4K (3rd generation)' && open -a Simulator" >&2
+    exit 1
+fi
+
+if ! pgrep -qf "Simulator.app/Contents/MacOS/Simulator"; then
+    echo "tvremote: Simulator.app is not running (key events need its window). Start it:" >&2
+    echo "  open -a Simulator" >&2
+    exit 1
+fi
+
+# Raise the Apple TV window, then send the presses. Both steps live in one
+# osascript call so the window can't lose focus between them.
+#
+# NOTE: this necessarily steals keyboard focus from whatever you were doing.
+# There is no headless alternative — for unattended runs use the XCUITest
+# target (UITests/), which drives XCUIRemote directly without a window.
+if ! osascript >/dev/null 2>&1 <<EOF
+tell application "Simulator" to activate
+delay $ACTIVATION_SETTLE
+tell application "System Events"
+    tell process "Simulator"
+        set candidates to (every window whose name contains "Apple TV")
+        if (count of candidates) is 0 then error "no Apple TV simulator window"
+        perform action "AXRaise" of (item 1 of candidates)
+        delay 0.3
+        repeat $count times
+            key code $code
+            delay $delay
+        end repeat
+    end tell
+end tell
+EOF
+then
+    echo "tvremote: failed to send key events." >&2
+    echo "  - Is an Apple TV window open in Simulator.app?" >&2
+    echo "  - Does the terminal have Accessibility permission?" >&2
+    echo "    (System Settings > Privacy & Security > Accessibility)" >&2
+    exit 1
+fi
+
+echo "tvremote: $button x$count -> ${udid:0:8}"
+
+if [[ "$want_shot" -eq 1 ]]; then
+    if [[ -z "$shot" ]]; then
+        shot="${TMPDIR:-/tmp}tvremote-$(date +%Y%m%d-%H%M%S).png"
+    fi
+    sleep "$RENDER_SETTLE"
+    # tvOS renders to a TVOut display; simctl picks it automatically.
+    xcrun simctl io "$udid" screenshot "$shot" >/dev/null 2>&1
+    echo "$shot"
+fi
