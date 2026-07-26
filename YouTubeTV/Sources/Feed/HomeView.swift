@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// The personalized Home feed: one horizontal, focusable row per YouTube shelf.
@@ -132,7 +133,7 @@ struct HomeView: View {
             continuation = page.continuation
             pagesLoaded = 1
         } catch {
-            if Task.isCancelled { return }
+            if isCancellation(error) { return }
             errorMessage = error.localizedDescription
             return
         }
@@ -197,7 +198,7 @@ struct HomeView: View {
             // refire on every scroll, paging forever with no visible progress.
             continuation = fresh.isEmpty ? nil : page.continuation
         } catch {
-            if Task.isCancelled { return }
+            if isCancellation(error) { return }
             // A failed page shouldn't wipe out the feed already on screen. Give up on paging
             // and leave what's loaded intact.
             continuation = nil
@@ -221,15 +222,23 @@ struct HomeView: View {
         do {
             return try await request(token)
         } catch {
-            // The view was dismissed while loading (cancellation surfaces as CancellationError
-            // or URLError.cancelled) — not a real error.
-            if Task.isCancelled { return nil }
+            // The view was dismissed while loading — not a real error.
+            if isCancellation(error) { return nil }
             guard isAuthError(error) else { throw error }
             guard await authStore.refresh(), let newToken = authStore.accessToken else {
                 return nil  // logged out — the router will show Login
             }
             return try await request(newToken)
         }
+    }
+
+    /// True when an error only means the work was cancelled — typically the view being
+    /// dismissed mid-load. `Task.isCancelled` alone isn't enough: URLSession reports a
+    /// cancelled request as `URLError.cancelled` (-999), which can surface without the
+    /// enclosing Task being marked cancelled, and would otherwise show the error screen.
+    private func isCancellation(_ error: Error) -> Bool {
+        if Task.isCancelled || error is CancellationError { return true }
+        return (error as? URLError)?.code == .cancelled
     }
 
     /// An expired/invalid access token surfaces as a 401/403 from InnerTube.
