@@ -108,7 +108,7 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
-                Task { await runSearch(trimmedQuery) }
+                Task { await search() }
             }
             .font(.headline)
         }
@@ -122,6 +122,21 @@ struct SearchView: View {
     /// Waits out the debounce, then searches — unless a newer keystroke cancelled this task.
     @MainActor
     private func searchAfterDebounce() async {
+        if trimmedQuery.count >= Self.minimumQueryLength {
+            // Cancelled by the next keystroke: leave the previous results on screen and
+            // let the newer task take over. Only the last of a burst gets past this.
+            // A query too short to run skips the wait — there's nothing to spare.
+            guard (try? await Task.sleep(for: Self.debounce)) != nil else { return }
+        }
+
+        await search()
+    }
+
+    /// The single entry point to running a query, so every caller — the debounced task and
+    /// the Retry button both — gets the same length check rather than Retry being able to
+    /// fire a request the typing path would have refused.
+    @MainActor
+    private func search() async {
         let text = trimmedQuery
         guard text.count >= Self.minimumQueryLength else {
             // Clearing the field returns to the prompt rather than leaving the previous
@@ -132,16 +147,6 @@ struct SearchView: View {
             return
         }
 
-        // Cancelled by the next keystroke: leave the previous results on screen and let
-        // the newer task take over. Only the last one in a burst gets past this.
-        guard (try? await Task.sleep(for: Self.debounce)) != nil else { return }
-
-        await runSearch(text)
-    }
-
-    @MainActor
-    private func runSearch(_ text: String) async {
-        guard !text.isEmpty else { return }
         guard authStore.accessToken != nil else {
             errorMessage = "You're not signed in."
             return

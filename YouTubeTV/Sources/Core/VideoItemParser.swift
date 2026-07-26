@@ -7,28 +7,32 @@ import Foundation
 /// response, or a single shelf — and get every playable video inside it, in document order.
 enum VideoItemParser {
 
-    /// Every video cell in `json`, in document order, deduped by videoId.
+    /// Every video cell in `json`, deduped by videoId.
     ///
     /// YouTube mixes cell shapes freely — a single search response returns a couple of
     /// `tileRenderer`s alongside dozens of `lockupViewModel`s — so all known shapes are
     /// collected in one pass rather than one shape being tried as a fallback for another.
     /// Anything that isn't a playable video (channels, playlists) is dropped: this app can
     /// only open the player, so a card that leads nowhere is worse than one fewer card.
+    ///
+    /// Order follows the arrays cells sit in — `contents`, `items` — which is the order
+    /// YouTube wants them shown in, and is what search relevance rides on. Between two
+    /// branches of the same dictionary there is no document order to follow, so the walk
+    /// takes them by sorted key: arbitrary, but the same on every run, which keeps both the
+    /// result order and which duplicate `dedupe` keeps from shifting between identical
+    /// responses. Cell keys are probed ahead of the recursion, so a dictionary that is
+    /// itself a cell is emitted before anything nested inside it.
     static func items(in json: [String: Any]) -> [VideoItem] {
         var results: [VideoItem] = []
 
         func walk(_ obj: Any) {
             if let dict = obj as? [String: Any] {
-                // Probed in a fixed order so a dictionary holding two shapes still parses
-                // deterministically, without sorting the keys of every dictionary in a
-                // large response. Ordering across the tree comes from the arrays cells sit
-                // in, which iterate in order.
                 for shape in Shape.allCases {
                     if let cell = dict[shape.key] as? [String: Any], let item = shape.parse(cell) {
                         results.append(item)
                     }
                 }
-                for value in dict.values { walk(value) }
+                for key in dict.keys.sorted() { walk(dict[key] as Any) }
             } else if let array = obj as? [Any] {
                 for value in array { walk(value) }
             }

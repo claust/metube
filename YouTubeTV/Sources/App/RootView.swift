@@ -22,6 +22,14 @@ struct RootView: View {
                 LoginView()
             }
         }
+        // Signing out swaps the view but not this state, so without resetting it a session
+        // that ended mid-search would reopen straight into Search — or re-present the player
+        // over the previous user's video — as soon as someone logs back in.
+        .onChange(of: authStore.isLoggedIn) { _, isLoggedIn in
+            guard !isLoggedIn else { return }
+            path = []
+            selectedVideo = nil
+        }
     }
 
     private var feed: some View {
