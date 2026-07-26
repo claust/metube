@@ -87,10 +87,12 @@ struct PlayerView: View {
             let stream = try await StreamService().resolveStream(videoId: video.id)
             // Only take over audio output once we actually have a playable stream.
             activateAudioSession()
-            // The stream URLs are minted for a specific InnerTube client; the manifest host
-            // rejects requests whose User-Agent doesn't match, so pass it down to CoreMedia.
+            // Keep CoreMedia's media requests on the same client identity that minted the URL.
+            // AVURLAssetHTTPUserAgentKey is public API (tvOS 16+); the more general
+            // AVURLAssetHTTPHeaderFieldsKey is an undocumented string key, so a typo in it would
+            // silently drop the headers instead of failing to compile.
             let asset = AVURLAsset(url: stream.url, options: [
-                "AVURLAssetHTTPHeaderFieldsKey": stream.httpHeaders
+                AVURLAssetHTTPUserAgentKey: stream.userAgent
             ])
             let item = AVPlayerItem(asset: asset)
             let avPlayer = AVPlayer(playerItem: item)

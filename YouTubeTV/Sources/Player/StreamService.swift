@@ -17,12 +17,14 @@ enum StreamError: LocalizedError {
     }
 }
 
-/// A stream ready to hand to AVFoundation, along with the headers its URLs must be fetched with.
+/// A stream ready to hand to AVFoundation.
 struct ResolvedStream {
     let url: URL
-    /// Headers for every media request. googlevideo serves the segments regardless, but the
-    /// manifest host is picky about matching the client that minted the URL.
-    let httpHeaders: [String: String]
+    /// User agent of the InnerTube client that minted the URL, sent on media requests so they
+    /// stay consistent with the `/player` call. Neither the manifest host nor googlevideo was
+    /// observed to enforce it (both serve a mismatched or absent agent), so this is about not
+    /// presenting as two different clients rather than a requirement.
+    let userAgent: String
     /// True for an HLS multivariant playlist (adaptive), false for a single progressive file.
     let isAdaptive: Bool
 }
@@ -100,12 +102,10 @@ struct StreamService {
             throw StreamError.notPlayable(reason)
         }
 
-        let headers = ["User-Agent": client.userAgent]
-
         // 1) HLS multivariant playlist — adaptive, audio included, native quality UI.
         if let hls = json.string(at: "streamingData/hlsManifestUrl"),
            let url = URL(string: hls) {
-            return ResolvedStream(url: url, httpHeaders: headers, isAdaptive: true)
+            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: true)
         }
 
         // 2) Progressive (muxed audio+video) formats under streamingData.formats.
@@ -118,7 +118,7 @@ struct StreamService {
             .filter({ intValue($0["itag"]) == 18 })
             .compactMap({ usableURL(from: $0) })
             .first {
-            return ResolvedStream(url: url, httpHeaders: headers, isAdaptive: false)
+            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false)
         }
 
         // Otherwise the first progressive MP4 that yields a usable url — a malformed url on one
@@ -127,7 +127,7 @@ struct StreamService {
             .filter({ isProgressiveMP4($0) })
             .compactMap({ usableURL(from: $0) })
             .first {
-            return ResolvedStream(url: url, httpHeaders: headers, isAdaptive: false)
+            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false)
         }
 
         // Playable, but this client returned nothing we can use — typically SABR-only, where
