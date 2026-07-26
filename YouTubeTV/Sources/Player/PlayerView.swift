@@ -11,6 +11,7 @@ struct PlayerView: View {
     @State private var player: AVPlayer?
     @State private var loadError: Error?
     @State private var isLoading = true
+    @State private var didPlayToEndObserver: NSObjectProtocol?
     #if DEBUG
     @State private var resolutionObservation: NSKeyValueObservation?
     #endif
@@ -85,6 +86,9 @@ struct PlayerView: View {
 
         do {
             let stream = try await StreamService().resolveStream(videoId: video.id)
+            // The view may have been dismissed while awaiting the resolved stream; bail out
+            // before taking over audio output or starting playback for a view that's gone.
+            guard !Task.isCancelled else { return }
             // Only take over audio output once we actually have a playable stream.
             activateAudioSession()
             // Keep CoreMedia's media requests on the same client identity that minted the URL.
@@ -98,6 +102,7 @@ struct PlayerView: View {
                 ])
             let item = AVPlayerItem(asset: asset)
             let avPlayer = AVPlayer(playerItem: item)
+            observePlaybackEnd(of: item)
             #if DEBUG
             observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
             #endif
@@ -110,6 +115,24 @@ struct PlayerView: View {
             // A real failure: don't hold the audio session while only an error is shown.
             deactivateAudioSession()
             self.loadError = error
+        }
+    }
+
+    /// Returns to the home screen automatically once the video finishes playing.
+    @MainActor
+    private func observePlaybackEnd(of item: AVPlayerItem) {
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+        }
+        // Capture onClose explicitly rather than self, which also holds the AVPlayer and
+        // would otherwise be captured just to reach this one closure property.
+        let onClose = onClose
+        didPlayToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            onClose()
         }
     }
 
@@ -149,6 +172,10 @@ struct PlayerView: View {
     }
 
     private func teardown() {
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+            self.didPlayToEndObserver = nil
+        }
         #if DEBUG
         resolutionObservation?.invalidate()
         resolutionObservation = nil
