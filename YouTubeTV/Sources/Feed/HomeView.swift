@@ -122,26 +122,35 @@ struct HomeView: View {
             errorMessage = "You're not signed in."
             return
         }
+        guard await loadHomeFirstPage() else { return }
+
+        // The spinner is already gone and Home's shelves are on screen, so a slow
+        // Subscriptions or History request delays only its own rows. Home also just
+        // succeeded, which means the token is good — no need to repeat the refresh dance.
+        if let token = authStore.accessToken {
+            await loadSupplementaryFeeds(accessToken: token)
+        }
+    }
+
+    /// Loads Home's first page. Returns `false` when nothing landed — an error, a cancellation,
+    /// or a sign-out — in which case the caller should not go on to the supplementary feeds.
+    @MainActor
+    private func loadHomeFirstPage() async -> Bool {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             guard let page = try await fetch({ try await FeedService().loadHome(accessToken: $0) }) else {
-                return  // cancelled or signed out — nothing to show and nothing to report
+                return false  // cancelled or signed out — nothing to show and nothing to report
             }
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            return true
         } catch {
-            if isCancellation(error) { return }
+            if isCancellation(error) { return false }
             errorMessage = error.localizedDescription
-            return
-        }
-
-        // Home succeeded, so the token is known good — the supplementary feeds can use it
-        // directly without repeating the refresh dance.
-        if let token = authStore.accessToken {
-            await loadSupplementaryFeeds(accessToken: token)
+            return false
         }
     }
 
@@ -171,6 +180,9 @@ struct HomeView: View {
     /// still rows below, so reaching the bottom doesn't stall on a network round-trip —
     /// waiting for the genuinely last row would make the delay visible every time.
     private func prefetchIfNeeded(from section: FeedSection) {
+        // Rows reappear constantly while scrolling, so check the cheap conditions before
+        // spawning a Task that loadMore() would only bail out of anyway.
+        guard continuation != nil, !isLoadingMore, pagesLoaded < Self.maxPages else { return }
         guard let index = sections.firstIndex(where: { $0.id == section.id }),
             index >= sections.count - Self.prefetchDistance
         else { return }
