@@ -34,6 +34,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dk.delectosoft.metube
         INFOPLIST_KEY_CFBundleDisplayName: YouTube TV
-        # Device builds: automatic signing. Simulator builds ignore these.
+        # Device builds use automatic signing; DEVELOPMENT_TEAM comes from
+        # Config/Secrets.xcconfig (gitignored) so each developer supplies their own.
+        # Simulator builds ignore both.
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: RS2FKJW2W4

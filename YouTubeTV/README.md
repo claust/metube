@@ -36,7 +36,9 @@ Sign in by visiting the shown URL on your phone/computer and entering the code (
 One-time setup:
 
 1. Sign into Xcode with your Apple ID (**Xcode → Settings → Apple Accounts**) so it can create a
-   provisioning profile, and set `DEVELOPMENT_TEAM` in `project.yml` to your own team ID.
+   provisioning profile, and set `DEVELOPMENT_TEAM` in your own `Config/Secrets.xcconfig` (find the
+   value with `security find-identity -v -p codesigning` — it's the cert's `OU`), then re-run
+   `xcodegen generate`.
 2. Pair the device: on the Apple TV open **Settings → Remote Apps and Devices**, then in Xcode
    **Window → Devices and Simulators** select it under *Discovered* and enter the code shown on
    the TV. The Mac and Apple TV must be on the same network.
