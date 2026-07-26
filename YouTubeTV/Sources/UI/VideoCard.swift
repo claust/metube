@@ -14,6 +14,7 @@ struct VideoCard: View {
     let item: VideoItem
     let action: () -> Void
 
+    @EnvironmentObject private var watchProgress: WatchProgressStore
     @FocusState private var isFocused: Bool
 
     /// Shared by the focus panel and the thumbnail's top corners.
@@ -34,6 +35,7 @@ struct VideoCard: View {
                     .frame(maxWidth: .infinity)
                     .overlay { thumbnail }
                     .overlay(alignment: .bottomTrailing) { channelBadge }
+                    .overlay(alignment: .bottom) { progressBar }
                     // Only the top corners are rounded — the bottom edge meets the caption,
                     // and matching the panel's radius keeps the two reading as one surface.
                     .clipShape(
@@ -98,6 +100,24 @@ struct VideoCard: View {
                 .padding(.vertical, 5)
                 .background(Capsule().fill(Color.black.opacity(0.65)))
                 .padding(10)
+        }
+    }
+
+    /// How far the user got last time: a red line along the bottom edge of the thumbnail, on a
+    /// dark track so the remainder reads as unwatched over a light image. Inside the artwork
+    /// rather than under it, matching where YouTube itself draws it. Absent until there's
+    /// something to show, so an unwatched card is unchanged.
+    @ViewBuilder
+    private var progressBar: some View {
+        if let fraction = watchProgress.fraction(for: item) {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Color.black.opacity(0.55)
+                    Color.red
+                        .frame(width: geometry.size.width * fraction)
+                }
+            }
+            .frame(height: 8)
         }
     }
 
