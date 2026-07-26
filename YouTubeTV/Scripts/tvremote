@@ -55,6 +55,17 @@ key_code_for() {
     esac
 }
 
+# Options taking a value must actually have one. Without this the trailing
+# `shift` in the parse loop runs with nothing left, which under `set -e` aborts
+# with bash's opaque "shift: can't shift that many" instead of a real message.
+require_value() {
+    local flag="$1" value="$2" remaining="$3"
+    if [[ "$remaining" -lt 2 || "$value" == -* ]]; then
+        echo "tvremote: $flag needs a value" >&2
+        exit 2
+    fi
+}
+
 button=""
 count=1
 shot=""
@@ -70,8 +81,12 @@ while [[ $# -gt 0 ]]; do
             # An optional path may follow, but not another flag.
             if [[ $# -gt 1 && "$2" != -* ]]; then shot="$2"; shift; fi
             ;;
-        -u|--udid) udid="${2:-}"; shift ;;
-        -d|--delay) delay="${2:-}"; shift ;;
+        -u|--udid)
+            require_value "$1" "${2:-}" $#
+            udid="$2"; shift ;;
+        -d|--delay)
+            require_value "$1" "${2:-}" $#
+            delay="$2"; shift ;;
         -*) echo "tvremote: unknown option '$1'" >&2; exit 2 ;;
         *)
             if [[ -z "$button" ]]; then button="$1"
@@ -92,6 +107,19 @@ fi
 
 if [[ "$count" -lt 1 ]]; then
     echo "tvremote: count must be at least 1" >&2
+    exit 2
+fi
+
+# $delay and $count are interpolated into the AppleScript below, so constrain
+# them to literal numbers — a stray value would otherwise become script text.
+if ! [[ "$delay" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "tvremote: --delay must be a number of seconds (got '$delay')" >&2
+    exit 2
+fi
+
+if [[ -n "$udid" && ! "$udid" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+    echo "tvremote: --udid must be a device UDID (got '$udid')" >&2
+    echo "  list them with: xcrun simctl list devices booted" >&2
     exit 2
 fi
 
@@ -148,7 +176,10 @@ echo "tvremote: $button x$count -> ${udid:0:8}"
 
 if [[ "$want_shot" -eq 1 ]]; then
     if [[ -z "$shot" ]]; then
-        shot="${TMPDIR:-/tmp}tvremote-$(date +%Y%m%d-%H%M%S).png"
+        # macOS sets TMPDIR with a trailing slash, but don't rely on it: strip
+        # any trailing slash and add exactly one.
+        tmpdir="${TMPDIR:-/tmp}"
+        shot="${tmpdir%/}/tvremote-$(date +%Y%m%d-%H%M%S).png"
     fi
     sleep "$RENDER_SETTLE"
     # tvOS renders to a TVOut display; simctl picks it automatically.
