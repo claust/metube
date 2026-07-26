@@ -6,12 +6,28 @@ struct VideoItem: Identifiable, Hashable {
     let title: String
     let author: String
     let thumbnailURL: URL?
+    /// When the video went up, approximated from InnerTube's "3 days ago" text at parse time
+    /// (see `RelativeTime.parse`). `nil` when the feed gave no age — Shorts and some History
+    /// rows don't.
+    let publishedAt: Date?
+    /// InnerTube's already-abbreviated view count ("1.2M views"), shown verbatim — it arrives
+    /// as display text, never as a number. Empty when the feed didn't supply one.
+    let viewCount: String
+    /// Running time as InnerTube renders it on the thumbnail ("21:55", "1:02:14"). Empty for
+    /// live streams and anything the feed didn't label.
+    let duration: String
 
-    init(id: String, title: String, author: String = "", thumbnailURL: URL? = nil) {
+    init(
+        id: String, title: String, author: String = "", thumbnailURL: URL? = nil,
+        publishedAt: Date? = nil, viewCount: String = "", duration: String = ""
+    ) {
         self.id = id
         self.title = title
         self.author = author
         self.thumbnailURL = thumbnailURL
+        self.publishedAt = publishedAt
+        self.viewCount = viewCount
+        self.duration = duration
     }
 }
 

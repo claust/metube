@@ -8,7 +8,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if authStore.isLoggedIn {
+            if authStore.isLoggedIn || isMockFeed {
                 HomeView(onSelectVideo: { video in
                     selectedVideo = video
                 })
@@ -23,5 +23,15 @@ struct RootView: View {
                 LoginView()
             }
         }
+    }
+
+    /// Debug builds launched with `-mockFeed` go straight to a canned Home, so layout work
+    /// can be seen on the simulator without signing in. Always false in release builds.
+    private var isMockFeed: Bool {
+        #if DEBUG
+        return MockFeed.isEnabled
+        #else
+        return false
+        #endif
     }
 }
