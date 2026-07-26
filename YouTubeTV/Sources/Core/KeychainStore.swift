@@ -5,7 +5,7 @@ import Security
 /// Used instead of UserDefaults so credentials aren't kept in plaintext preferences.
 enum KeychainStore {
     /// All items are scoped under this service so they're easy to enumerate/remove.
-    private static let service = "com.prototype.youtubetv.tokens"
+    private static let service = "dk.delectosoft.metube.tokens"
 
     static func set(_ value: String?, for account: String) {
         // A nil value clears the item.
