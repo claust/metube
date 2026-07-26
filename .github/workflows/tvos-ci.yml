@@ -60,7 +60,15 @@ jobs:
 
       # xcbeautify prettifies xcodebuild output in the Build step; install it
       # explicitly rather than relying on it being preinstalled.
+      #
+      # Skip Homebrew's auto-update and post-install cleanup: both cost real
+      # time on every run for no benefit here (the formulae are pinned to
+      # whatever the image ships, and the runner is discarded afterwards), and
+      # macOS minutes bill at 10x.
       - name: Install tooling (XcodeGen + SwiftLint + xcbeautify)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: brew install xcodegen swiftlint xcbeautify
 
       # Simulator builds need no signing and exercise no YouTube credentials,

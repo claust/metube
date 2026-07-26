@@ -20,8 +20,10 @@ line_length:
   ignores_comments: true
   ignores_urls: true
 
-# SwiftUI view bodies and the InnerTube response parsers legitimately run long;
-# keep these as warnings with generous ceilings so they inform without failing CI.
+# SwiftUI view bodies and the InnerTube response parsers legitimately run long.
+# Under --strict every violation fails the build, warning-level included, so
+# these ceilings are set high enough that honest length doesn't trip them —
+# they catch runaway growth, not ordinary code.
 type_body_length:
   warning: 400
   error: 600
