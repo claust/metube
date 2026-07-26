@@ -11,6 +11,7 @@ struct PlayerView: View {
     @State private var player: AVPlayer?
     @State private var loadError: Error?
     @State private var isLoading = true
+    @State private var didPlayToEndObserver: NSObjectProtocol?
     #if DEBUG
     @State private var resolutionObservation: NSKeyValueObservation?
     #endif
@@ -96,6 +97,7 @@ struct PlayerView: View {
             ])
             let item = AVPlayerItem(asset: asset)
             let avPlayer = AVPlayer(playerItem: item)
+            observePlaybackEnd(of: item)
             #if DEBUG
             observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
             #endif
@@ -108,6 +110,18 @@ struct PlayerView: View {
             // A real failure: don't hold the audio session while only an error is shown.
             deactivateAudioSession()
             self.loadError = error
+        }
+    }
+
+    /// Returns to the home screen automatically once the video finishes playing.
+    @MainActor
+    private func observePlaybackEnd(of item: AVPlayerItem) {
+        didPlayToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            onClose()
         }
     }
 
@@ -145,6 +159,10 @@ struct PlayerView: View {
     }
 
     private func teardown() {
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+            self.didPlayToEndObserver = nil
+        }
         #if DEBUG
         resolutionObservation?.invalidate()
         resolutionObservation = nil
