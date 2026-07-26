@@ -63,13 +63,51 @@ xcrun devicectl device process launch --device "$DEVICE_ID" dk.delectosoft.metub
 On a free Apple developer account the installed app stops working after 7 days and must be
 reinstalled; a paid membership lasts a year.
 
+## Drive the simulator remote
+
+tvOS has no touch input, so the simulator is navigated entirely with the Siri Remote's
+directional pad. `xcrun simctl` cannot send those presses (it has no key/press subcommand),
+so `Scripts/tvremote` synthesizes key events to Simulator.app instead:
+
+```sh
+Scripts/tvremote right 2 --shot     # two steps right, then screenshot
+Scripts/tvremote down               # one step down
+Scripts/tvremote select             # up down left right select menu playpause
+```
+
+It raises the Apple TV window before the first press (activation otherwise swallows one) and
+spaces presses 1s apart by default, because tvOS treats rapid repeats as an accelerating
+scroll — two quick rights can jump several cards. It needs Simulator.app running and
+Accessibility permission, and it necessarily takes keyboard focus, so it is interactive-only.
+
+Screenshots work independently of the remote, and are the reliable way to see a tvOS device:
+
+```sh
+xcrun simctl io booted screenshot out.png   # picks the TVOut display automatically
+```
+
+## UI tests
+
+`UITests/` drives the focus engine through `XCUIRemote` — the supported, headless path, and the
+right one for CI:
+
+```sh
+xcodebuild test -project YouTubeTV.xcodeproj -scheme YouTubeTV -sdk appletvsimulator \
+  -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' -derivedDataPath build
+```
+
+The tests skip rather than fail when the target simulator is signed out or the feed fails to
+load: both states leave a single focusable button, so directional navigation has nothing to
+assert. Sign in on the simulator you test against to actually exercise them. Note that
+`xcodebuild test` installs the app it builds onto that device.
+
 ## Lint & format
 
 ```sh
 brew install swiftlint
 swiftlint lint --quiet --strict            # style rules (.swiftlint.yml)
-xcrun swift-format lint --strict --recursive Sources   # layout (.swift-format)
-xcrun swift-format format -i --recursive Sources       # auto-fix layout
+xcrun swift-format lint --strict --recursive Sources UITests   # layout (.swift-format)
+xcrun swift-format format -i --recursive Sources UITests       # auto-fix layout
 ```
 
 swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces

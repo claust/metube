@@ -1,0 +1,251 @@
+#!/bin/bash
+#
+# tvremote — drive the Apple TV simulator's Siri Remote from the command line.
+#
+# tvOS has no touch input, and neither `simctl` nor the Claude Code simulator
+# integration can send directional presses: `simctl` has no key/press subcommand,
+# and the MCP server's tvOS screenshot fails outright ("Could not find the Main
+# Screen Surface" — a tvOS device publishes a TVOut display, not a main screen).
+# The one path that works is synthesizing key events to Simulator.app, which maps
+# the arrow keys onto the remote's directional pad.
+#
+# Two behaviours make hand-rolling this error-prone, and are handled below:
+#
+#   1. Activating the Simulator window swallows the first key press, so a cold
+#      invocation silently loses a step.
+#   2. tvOS applies remote *acceleration*: presses arriving in quick succession
+#      are treated as an accelerating scroll, exactly like holding the direction
+#      on a real remote. Two rights 0.5s apart can jump several cards and cross
+#      into the next section. Spacing them out keeps movement one-step-exact.
+#
+# Usage:
+#   tvremote <button> [count] [options]
+#
+#   Buttons:  up down left right select menu playpause
+#   Options:
+#     -s, --shot [PATH]   screenshot after the presses (default: $TMPDIR)
+#     -u, --udid UDID     target device (default: first booted tvOS simulator).
+#                         Key events go to that device's Simulator window, found
+#                         by device name — so two booted devices sharing a name
+#                         are rejected rather than guessed between.
+#     -d, --delay SEC     seconds between presses (default: 1.0)
+#     -h, --help          this text
+#
+# Examples:
+#   tvremote right              # one step right
+#   tvremote down 3             # three steps down, safely spaced
+#   tvremote select --shot      # select, then capture the result
+
+set -euo pipefail
+
+readonly ACTIVATION_SETTLE=0.5   # lets the raised window consume its focus event
+readonly RENDER_SETTLE=0.8       # SwiftUI focus animations before a screenshot
+
+# Prints the header comment block as help. Runs to the first non-comment line
+# rather than a fixed range, so editing the header can't silently truncate it.
+usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
+
+key_code_for() {
+    case "$1" in
+        up)        echo 126 ;;
+        down)      echo 125 ;;
+        left)      echo 123 ;;
+        right)     echo 124 ;;
+        select)    echo 36  ;;  # Return
+        menu)      echo 53  ;;  # Escape
+        playpause) echo 49  ;;  # Space
+        *)         return 1 ;;
+    esac
+}
+
+# Options taking a value must actually have one. Without this the trailing
+# `shift` in the parse loop runs with nothing left, which under `set -e` aborts
+# with bash's opaque "shift: can't shift that many" instead of a real message.
+require_value() {
+    local flag="$1" value="$2" remaining="$3"
+    if [[ "$remaining" -lt 2 || "$value" == -* ]]; then
+        echo "tvremote: $flag needs a value" >&2
+        exit 2
+    fi
+}
+
+button=""
+count=1
+shot=""
+want_shot=0
+udid=""
+delay=1.0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -s|--shot)
+            want_shot=1
+            # An optional path may follow, but not another flag.
+            if [[ $# -gt 1 && "$2" != -* ]]; then shot="$2"; shift; fi
+            ;;
+        -u|--udid)
+            require_value "$1" "${2:-}" $#
+            udid="$2"; shift ;;
+        -d|--delay)
+            require_value "$1" "${2:-}" $#
+            delay="$2"; shift ;;
+        -*) echo "tvremote: unknown option '$1'" >&2; exit 2 ;;
+        *)
+            if [[ -z "$button" ]]; then button="$1"
+            elif [[ "$1" =~ ^[0-9]+$ ]]; then count="$1"
+            else echo "tvremote: unexpected argument '$1'" >&2; exit 2
+            fi
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$button" ]]; then usage; exit 2; fi
+
+if ! code=$(key_code_for "$button"); then
+    echo "tvremote: unknown button '$button' (up down left right select menu playpause)" >&2
+    exit 2
+fi
+
+if [[ "$count" -lt 1 ]]; then
+    echo "tvremote: count must be at least 1" >&2
+    exit 2
+fi
+
+# $delay and $count are interpolated into the AppleScript below, so constrain
+# them to literal numbers — a stray value would otherwise become script text.
+# A leading dot is accepted: ".5" is valid AppleScript and a natural thing to type.
+if ! [[ "$delay" =~ ^([0-9]+(\.[0-9]+)?|\.[0-9]+)$ ]]; then
+    echo "tvremote: --delay must be a number of seconds (got '$delay')" >&2
+    exit 2
+fi
+
+if [[ -n "$udid" && ! "$udid" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+    echo "tvremote: --udid must be a device UDID (got '$udid')" >&2
+    echo "  list them with: xcrun simctl list devices booted" >&2
+    exit 2
+fi
+
+# Resolve the target device. Without a UDID, take the first booted tvOS simulator.
+# simctl prints UDIDs uppercase today; accept either case rather than depend on it.
+if [[ -z "$udid" ]]; then
+    udid=$(xcrun simctl list devices booted 2>/dev/null \
+        | awk '/^-- tvOS/{tv=1; next} /^--/{tv=0} tv && match($0, /\(([0-9A-Fa-f-]{36})\)/) {
+                 print substr($0, RSTART+1, RLENGTH-2); exit }')
+fi
+
+if [[ -z "$udid" ]]; then
+    echo "tvremote: no booted tvOS simulator found. Boot one first:" >&2
+    echo "  xcrun simctl boot 'Apple TV 4K (3rd generation)' && open -a Simulator" >&2
+    exit 1
+fi
+
+if ! pgrep -qf "Simulator.app/Contents/MacOS/Simulator"; then
+    echo "tvremote: Simulator.app is not running (key events need its window). Start it:" >&2
+    echo "  open -a Simulator" >&2
+    exit 1
+fi
+
+# Simulator window titles carry the device *name*, never the UDID, so that name
+# is the only handle for pointing key events at the same device the screenshot
+# comes from. Names are not unique — several "Apple TV 4K (3rd generation)"
+# devices can be booted at once — so refuse rather than guess when the booted set
+# is ambiguous. Guessing would steer one device while capturing another.
+# Cut at " (<udid>", not the first " (" — device names contain parentheses of
+# their own, e.g. "Apple TV 4K (3rd generation)".
+device_name=$(xcrun simctl list devices booted 2>/dev/null \
+    | awk -v u="$udid" 'index($0, u) { sub(/^ +/, ""); print substr($0, 1, index($0, " (" u) - 1); exit }')
+
+if [[ -z "$device_name" ]]; then
+    echo "tvremote: $udid is not a booted device." >&2
+    echo "  list them with: xcrun simctl list devices booted" >&2
+    exit 1
+fi
+
+# The name goes into an AppleScript double-quoted string, so escape the two
+# characters that can break out of one. Everything else — apostrophes, commas,
+# accents — is safe inside the quotes and stays usable for renamed devices.
+device_name_script=${device_name//\\/\\\\}
+device_name_script=${device_name_script//\"/\\\"}
+
+# A newline would still split the generated script across lines, and no real
+# device name has one. Renaming is the only fix here: --udid can't help, since
+# we already resolved this name *from* a UDID.
+if [[ "$device_name" == *$'\n'* ]]; then
+    echo "tvremote: device name contains a newline, which can't be targeted." >&2
+    echo "  Rename it in Xcode > Window > Devices and Simulators." >&2
+    exit 1
+fi
+
+# Compare whole names, not prefixes: "Apple TV 4K (3rd generation)" is a prefix
+# of "Apple TV 4K (3rd generation) (at 1080p)", and a substring test would call
+# those two devices namesakes and refuse an unambiguous target.
+namesakes=$(xcrun simctl list devices booted 2>/dev/null \
+    | awk -v n="$device_name" '
+        match($0, / \([0-9A-Fa-f-]{36}\)/) {
+            name = substr($0, 1, RSTART - 1)
+            sub(/^ +/, "", name)
+            if (name == n) { c++ }
+        }
+        END { print c+0 }')
+
+if [[ "$namesakes" -gt 1 ]]; then
+    echo "tvremote: $namesakes booted devices are named '$device_name'." >&2
+    echo "  Window titles carry only the name, so the right window can't be identified." >&2
+    echo "  Shut down the duplicates, or rename one in Xcode's Devices window." >&2
+    exit 1
+fi
+
+# Raise the Apple TV window, then send the presses. Both steps live in one
+# osascript call so the window can't lose focus between them.
+#
+# NOTE: this necessarily steals keyboard focus from whatever you were doing.
+# There is no headless alternative — for unattended runs use the XCUITest
+# target (UITests/), which drives XCUIRemote directly without a window.
+if ! osascript >/dev/null 2>&1 <<EOF
+tell application "Simulator" to activate
+delay $ACTIVATION_SETTLE
+tell application "System Events"
+    tell process "Simulator"
+        -- Titles read "<device name> – <runtime>". Match the name plus that
+        -- separator first, so a device called "Apple TV" doesn't also match the
+        -- "Apple TV 4K ..." window; fall back to a plain prefix if Apple ever
+        -- changes the separator.
+        set candidates to (every window whose name starts with "$device_name_script –")
+        if (count of candidates) is 0 then
+            set candidates to (every window whose name starts with "$device_name_script")
+        end if
+        if (count of candidates) is 0 then error "no window titled \"$device_name_script\""
+        if (count of candidates) > 1 then error "several windows match \"$device_name_script\""
+        perform action "AXRaise" of (item 1 of candidates)
+        delay 0.3
+        repeat $count times
+            key code $code
+            delay $delay
+        end repeat
+    end tell
+end tell
+EOF
+then
+    echo "tvremote: failed to send key events." >&2
+    echo "  - Is an Apple TV window open in Simulator.app?" >&2
+    echo "  - Does the terminal have Accessibility permission?" >&2
+    echo "    (System Settings > Privacy & Security > Accessibility)" >&2
+    exit 1
+fi
+
+echo "tvremote: $button x$count -> ${udid:0:8}"
+
+if [[ "$want_shot" -eq 1 ]]; then
+    if [[ -z "$shot" ]]; then
+        # macOS sets TMPDIR with a trailing slash, but don't rely on it: strip
+        # any trailing slash and add exactly one.
+        tmpdir="${TMPDIR:-/tmp}"
+        shot="${tmpdir%/}/tvremote-$(date +%Y%m%d-%H%M%S).png"
+    fi
+    sleep "$RENDER_SETTLE"
+    # tvOS renders to a TVOut display; simctl picks it automatically.
+    xcrun simctl io "$udid" screenshot "$shot" >/dev/null 2>&1
+    echo "$shot"
+fi

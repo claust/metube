@@ -5,6 +5,7 @@
 
 included:
   - Sources
+  - UITests
 
 # The generated Xcode project and build output are gitignored, but exclude them
 # defensively so a local lint run never walks into generated sources.

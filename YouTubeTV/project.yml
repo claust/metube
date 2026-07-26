@@ -15,6 +15,9 @@ targets:
   YouTubeTV:
     type: application
     platform: tvOS
+    scheme:
+      testTargets:
+        - YouTubeTVUITests
     sources:
       - path: Sources
     configFiles:
@@ -38,3 +41,20 @@ targets:
         # Config/Secrets.xcconfig (gitignored) so each developer supplies their own.
         # Simulator builds ignore both.
         CODE_SIGN_STYLE: Automatic
+
+  YouTubeTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: YouTubeTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dk.delectosoft.metube.uitests
+        TEST_TARGET_NAME: YouTubeTV
+        CODE_SIGN_STYLE: Automatic
+        # The app target's Info.plist is generated from the `info:` block above; the
+        # test bundle has nothing to declare, so let Xcode synthesize one. Without
+        # this, codesigning the test bundle fails.
+        GENERATE_INFOPLIST_FILE: YES
