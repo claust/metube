@@ -129,18 +129,23 @@ struct FeedService {
     /// Collects every shelf-shaped renderer. Shelves sit in the `sectionListRenderer.contents`
     /// array, so array order — which is the order YouTube wants the rows displayed in — is
     /// preserved. This can't reuse `findAllRenderers` per name, which would group all shelves
-    /// of one kind ahead of the other. Dictionary keys are visited sorted only so that a
-    /// response mixing shelf kinds at one level parses deterministically.
+    /// of one kind ahead of the other.
+    ///
+    /// Shelf keys are probed in a fixed order at each level, so a response mixing shelf kinds
+    /// in one dictionary still parses deterministically without sorting the keys of every
+    /// dictionary in a large response. Recursing after the probe also means an outer shelf is
+    /// always emitted before any shelf nested inside it, which is what the nested-duplicate
+    /// check in `parseSections` assumes.
     private func findShelves(in json: [String: Any]) -> [[String: Any]] {
         var results: [[String: Any]] = []
         func walk(_ obj: Any) {
             if let dict = obj as? [String: Any] {
-                for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
-                    if Self.shelfRendererNames.contains(key), let renderer = value as? [String: Any] {
+                for name in Self.shelfRendererNames {
+                    if let renderer = dict[name] as? [String: Any] {
                         results.append(renderer)
                     }
-                    walk(value)
                 }
+                for value in dict.values { walk(value) }
             } else if let array = obj as? [Any] {
                 for value in array { walk(value) }
             }
