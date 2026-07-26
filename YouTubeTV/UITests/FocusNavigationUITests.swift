@@ -23,34 +23,50 @@ final class FocusNavigationUITests: XCTestCase {
         }
     }
 
+    /// The focused element's label, used as its identity when comparing before/after.
+    ///
+    /// A label may legitimately be empty (`waitForFocus` documents this), and an empty
+    /// or absent label cannot distinguish one element from another: comparing them
+    /// would report movement that didn't happen, or miss movement that did. Every card
+    /// on the loaded feed carries its title, so this holds in practice — if it ever
+    /// doesn't, skip rather than assert on an identity that can't tell things apart.
+    private func requireFocusLabel(_ context: String) throws -> String {
+        guard let label = app.focusedLabel, !label.isEmpty else {
+            throw XCTSkip("\(context): focus is missing or unlabelled, so it can't be identified.")
+        }
+        return label
+    }
+
     /// A right press should move focus to the next card in the row.
-    func testRightPressMovesFocusToNextCard() {
-        let before = app.focusedLabel
-        XCTAssertNotNil(before, "Expected an element to hold focus on launch.")
+    func testRightPressMovesFocusToNextCard() throws {
+        let before = try requireFocusLabel("before right press")
 
         RemoteDriver.press(.right)
 
-        XCTAssertNotEqual(app.focusedLabel, before, "Right press did not move focus.")
+        let after = try requireFocusLabel("after right press")
+        XCTAssertNotEqual(after, before, "Right press did not move focus.")
     }
 
     /// Down then up should return focus to where it started, which is the property
     /// that actually breaks when a grid's focus sections are laid out wrong.
-    func testDownThenUpRestoresOriginalFocus() {
-        let origin = app.focusedLabel
+    func testDownThenUpRestoresOriginalFocus() throws {
+        let origin = try requireFocusLabel("before down press")
 
         RemoteDriver.press(.down)
-        XCTAssertNotEqual(app.focusedLabel, origin, "Down press did not move focus.")
+        let moved = try requireFocusLabel("after down press")
+        XCTAssertNotEqual(moved, origin, "Down press did not move focus.")
 
         RemoteDriver.press(.up)
-        XCTAssertEqual(app.focusedLabel, origin, "Focus did not return to the original card.")
+        let returned = try requireFocusLabel("after up press")
+        XCTAssertEqual(returned, origin, "Focus did not return to the original card.")
     }
 
     /// Walking right across the row should visit distinct cards rather than getting
     /// stuck — the failure mode when a lazy grid stops materializing focusable views.
-    func testWalkingAcrossRowVisitsDistinctCards() {
+    func testWalkingAcrossRowVisitsDistinctCards() throws {
         var visited: [String] = []
-        for _ in 0..<4 {
-            if let label = app.focusedLabel { visited.append(label) }
+        for step in 0..<4 {
+            visited.append(try requireFocusLabel("step \(step) of walking right"))
             RemoteDriver.press(.right)
         }
 

@@ -106,8 +106,8 @@ assert. Sign in on the simulator you test against to actually exercise them. Not
 ```sh
 brew install swiftlint
 swiftlint lint --quiet --strict            # style rules (.swiftlint.yml)
-xcrun swift-format lint --strict --recursive Sources   # layout (.swift-format)
-xcrun swift-format format -i --recursive Sources       # auto-fix layout
+xcrun swift-format lint --strict --recursive Sources UITests   # layout (.swift-format)
+xcrun swift-format format -i --recursive Sources UITests       # auto-fix layout
 ```
 
 swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces

@@ -124,9 +124,10 @@ if [[ -n "$udid" && ! "$udid" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
 fi
 
 # Resolve the target device. Without a UDID, take the first booted tvOS simulator.
+# simctl prints UDIDs uppercase today; accept either case rather than depend on it.
 if [[ -z "$udid" ]]; then
     udid=$(xcrun simctl list devices booted 2>/dev/null \
-        | awk '/^-- tvOS/{tv=1; next} /^--/{tv=0} tv && match($0, /\(([0-9A-F-]{36})\)/) {
+        | awk '/^-- tvOS/{tv=1; next} /^--/{tv=0} tv && match($0, /\(([0-9A-Fa-f-]{36})\)/) {
                  print substr($0, RSTART+1, RLENGTH-2); exit }')
 fi
 
