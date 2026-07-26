@@ -18,9 +18,9 @@ concurrency:
 jobs:
   lint-build:
     name: Lint & build
-    # macos-15 carries an Xcode 26 toolchain (the tvOS 26 SDK); the "Select
-    # Xcode 26" step pins the exact version, so this only needs an image that
-    # has a 26.x installed.
+    # The app targets tvOS 18, so no particular Xcode is required — the
+    # "Select Xcode" step takes latest-stable and the next step installs the
+    # tvOS platform if that toolchain lacks it.
     runs-on: macos-15
     defaults:
       run:
