@@ -178,8 +178,17 @@ if [[ "$device_name" == *$'\n'* ]]; then
     exit 1
 fi
 
+# Compare whole names, not prefixes: "Apple TV 4K (3rd generation)" is a prefix
+# of "Apple TV 4K (3rd generation) (at 1080p)", and a substring test would call
+# those two devices namesakes and refuse an unambiguous target.
 namesakes=$(xcrun simctl list devices booted 2>/dev/null \
-    | awk -v n="$device_name" 'index($0, n " (") { c++ } END { print c+0 }')
+    | awk -v n="$device_name" '
+        match($0, / \([0-9A-Fa-f-]{36}\)/) {
+            name = substr($0, 1, RSTART - 1)
+            sub(/^ +/, "", name)
+            if (name == n) { c++ }
+        }
+        END { print c+0 }')
 
 if [[ "$namesakes" -gt 1 ]]; then
     echo "tvremote: $namesakes booted devices are named '$device_name'." >&2
