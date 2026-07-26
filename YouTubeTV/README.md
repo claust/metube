@@ -116,15 +116,20 @@ so any violation blocks the merge.
 
 ## Structure
 
-- `Sources/Core` — InnerTube client, OAuth token store, models (shared contracts)
+- `Sources/Core` — InnerTube client, OAuth token store, models, video-cell parsing (shared contracts)
 - `Sources/Auth` — OAuth device-activation flow + `LoginView`
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
+- `Sources/Search` — TV `search` + `SearchView` (reached from the icon in the Home header)
+- `Sources/UI` — the video card and layout metrics both screens share
 - `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController`
 - `reference/` — distilled InnerTube notes and captured sample responses
 
 ## Scope / limitations
 
-Intentionally minimal: no search, subscriptions, shorts, or ad blocking.
+Intentionally minimal: no subscriptions management, shorts, or ad blocking.
+
+Search is one page of results with no filters and no paging past it — enough to find and
+play something, not a replacement for YouTube's search UI.
 
 Playback uses the HLS multivariant playlist from the VISIONOS InnerTube client, which needs only
 a scraped `visitorData` token — no PO token and no JavaScript signature deciphering. AVFoundation
