@@ -25,9 +25,9 @@ enum AppConfig {
 
     // MARK: InnerTube clients
     enum Client {
-        case tv        // personalized feeds — needs Bearer token
+        case tv  // personalized feeds — needs Bearer token
         case visionOS  // playback stream extraction — HLS ladder up to 1080p60, needs visitorData
-        case android   // playback fallback — muxed itag 18 only (360p)
+        case android  // playback fallback — muxed itag 18 only (360p)
 
         var name: String {
             switch self {
@@ -53,10 +53,15 @@ enum AppConfig {
         }
         var userAgent: String {
             switch self {
+            // These UA strings have to be reproduced verbatim; they can't be wrapped.
+            // swiftlint:disable line_length
             case .tv:
-                return "Mozilla/5.0 (Linux armeabi-v7a; Android 7.1.2; Fire OS 6.0) Cobalt/22.lts.3.306369-gold (unlike Gecko) v8/8.8.278.8-jit gles Starboard/13, Amazon_ATV_mediatek8695_2019/NS6294 (Amazon, AFTMM, Wireless) com.amazon.firetv.youtube/22.3.r2.v66.0"
+                return
+                    "Mozilla/5.0 (Linux armeabi-v7a; Android 7.1.2; Fire OS 6.0) Cobalt/22.lts.3.306369-gold (unlike Gecko) v8/8.8.278.8-jit gles Starboard/13, Amazon_ATV_mediatek8695_2019/NS6294 (Amazon, AFTMM, Wireless) com.amazon.firetv.youtube/22.3.r2.v66.0"
             case .visionOS:
-                return "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+                return
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+            // swiftlint:enable line_length
             case .android:
                 return "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
             }
@@ -94,7 +99,7 @@ enum AppConfig {
                     "deviceMake": "Apple",
                     "deviceModel": "RealityDevice17,1",
                     "osName": "visionOS",
-                    "osVersion": "26.5.23O471"
+                    "osVersion": "26.5.23O471",
                 ]
             case .android:
                 return ["androidSdkVersion": 30, "osName": "Android", "osVersion": "11"]

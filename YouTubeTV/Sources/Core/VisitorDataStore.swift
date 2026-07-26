@@ -73,8 +73,9 @@ actor VisitorDataStore {
         // Drop the `"visitorData":` prefix, leaving a complete JSON string literal.
         let literal = html[range].dropFirst(#""visitorData":"#.count)
         guard let data = literal.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(String.self, from: data),
-              !decoded.isEmpty else {
+            let decoded = try? JSONDecoder().decode(String.self, from: data),
+            !decoded.isEmpty
+        else {
             return nil
         }
         return decoded

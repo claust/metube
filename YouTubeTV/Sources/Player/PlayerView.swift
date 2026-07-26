@@ -91,9 +91,11 @@ struct PlayerView: View {
             // AVURLAssetHTTPUserAgentKey is public API (tvOS 16+); the more general
             // AVURLAssetHTTPHeaderFieldsKey is an undocumented string key, so a typo in it would
             // silently drop the headers instead of failing to compile.
-            let asset = AVURLAsset(url: stream.url, options: [
-                AVURLAssetHTTPUserAgentKey: stream.userAgent
-            ])
+            let asset = AVURLAsset(
+                url: stream.url,
+                options: [
+                    AVURLAssetHTTPUserAgentKey: stream.userAgent
+                ])
             let item = AVPlayerItem(asset: asset)
             let avPlayer = AVPlayer(playerItem: item)
             #if DEBUG
@@ -122,8 +124,10 @@ struct PlayerView: View {
             let size = item.presentationSize
             guard size != .zero else { return }
             let bitrate = item.accessLog()?.events.last?.indicatedBitrate ?? 0
-            print(String(format: "[PlayerView] %@ delivering %dx%d (indicated %.1f Mbps)",
-                         kind, Int(size.width), Int(size.height), bitrate / 1_000_000))
+            print(
+                String(
+                    format: "[PlayerView] %@ delivering %dx%d (indicated %.1f Mbps)",
+                    kind, Int(size.width), Int(size.height), bitrate / 1_000_000))
         }
     }
     #endif

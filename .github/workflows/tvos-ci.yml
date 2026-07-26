@@ -1,0 +1,107 @@
+name: tvOS CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# macOS runner minutes bill at 10x the Linux rate on private repos, so cancel
+# superseded runs rather than stacking expensive macOS jobs.
+concurrency:
+  group: tvos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-build:
+    name: Lint & build
+    # The app targets tvOS 18, so no particular Xcode is required — the
+    # "Select Xcode" step takes latest-stable and the next step installs the
+    # tvOS platform if that toolchain lacks it.
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: YouTubeTV
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Select a toolchain by version rather than a hard-coded /Applications
+      # path, which can break across runner-image updates. The app targets
+      # tvOS 18, so any current Xcode will do — take whatever is newest.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i tvos || echo "(no tvOS SDK yet)"
+          xcrun simctl list runtimes | grep tvOS || true
+
+      # Runner images no longer ship every platform with every Xcode — the
+      # selected Xcode may have no tvOS SDK at all, even when tvOS runtimes
+      # belonging to *other* Xcode versions are installed (that is what broke
+      # the first run of this workflow). Installing it takes several minutes,
+      # so only do it when it is genuinely missing; on an image that already
+      # has it, this step is a no-op.
+      - name: Ensure tvOS platform is installed
+        run: |
+          if xcodebuild -showsdks | grep -q appletvsimulator; then
+            echo "tvOS SDK already present."
+          else
+            echo "tvOS SDK missing — downloading platform."
+            sudo xcodebuild -downloadPlatform tvOS
+          fi
+
+      # xcbeautify prettifies xcodebuild output in the Build step; install it
+      # explicitly rather than relying on it being preinstalled.
+      #
+      # Skip Homebrew's auto-update and post-install cleanup: both cost real
+      # time on every run for no benefit here (the formulae are pinned to
+      # whatever the image ships, and the runner is discarded afterwards), and
+      # macOS minutes bill at 10x.
+      - name: Install tooling (XcodeGen + SwiftLint + xcbeautify)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: brew install xcodegen swiftlint xcbeautify
+
+      # Simulator builds need no signing and exercise no YouTube credentials,
+      # so the placeholder values in the example config (gitignored
+      # Secrets.xcconfig is required by project.yml) are enough. No repo
+      # secrets required.
+      - name: Stub Secrets.xcconfig
+        run: cp Config/Secrets.example.xcconfig Config/Secrets.xcconfig
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # --strict promotes every warning to an error so lint warnings block the
+      # merge instead of merely surfacing in the log.
+      - name: SwiftLint
+        run: swiftlint lint --quiet --strict
+
+      # swift-format (bundled with the selected Xcode) owns layout; enforce it
+      # in CI so unformatted code can't merge. Config lives in .swift-format.
+      # --strict fails the job on any formatting drift.
+      - name: swift-format lint
+        run: xcrun swift-format lint --strict --recursive Sources
+
+      # A generic simulator destination compiles for appletvsimulator without
+      # needing a bootable device, so CI never depends on which concrete Apple
+      # TV simulator the runner image ships.
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project YouTubeTV.xcodeproj \
+            -scheme YouTubeTV \
+            -destination 'generic/platform=tvOS Simulator' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify

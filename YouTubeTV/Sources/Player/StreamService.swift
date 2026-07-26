@@ -113,7 +113,8 @@ struct StreamService {
         // codes fall through to the generic friendly message instead of being shown to the user.
         let status = json.string(at: "playabilityStatus/status")
         if status != "OK" {
-            let reason = json.string(at: "playabilityStatus/reason")
+            let reason =
+                json.string(at: "playabilityStatus/reason")
                 ?? json.string(at: "playabilityStatus/errorScreen/playerErrorMessageRenderer/reason/simpleText")
                 ?? ""
             // LOGIN_REQUIRED and ERROR are ambiguous: they are what a gated client returns, and
@@ -126,12 +127,14 @@ struct StreamService {
 
         // 1) HLS multivariant playlist — adaptive, audio included, native quality UI.
         if let hls = json.string(at: "streamingData/hlsManifestUrl"),
-           let url = URL(string: hls) {
+            let url = URL(string: hls)
+        {
             return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: true))
         }
 
         // 2) Progressive (muxed audio+video) formats under streamingData.formats.
-        let formats = (json.value(at: "streamingData/formats") as? [Any])?
+        let formats =
+            (json.value(at: "streamingData/formats") as? [Any])?
             .compactMap { $0 as? [String: Any] } ?? []
 
         // Prefer itag 18 (360p MP4) — the one muxed format that reliably carries a plain `url`
@@ -139,7 +142,8 @@ struct StreamService {
         if let url = formats.lazy
             .filter({ intValue($0["itag"]) == 18 })
             .compactMap({ usableURL(from: $0) })
-            .first {
+            .first
+        {
             return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
         }
 
@@ -148,7 +152,8 @@ struct StreamService {
         if let url = formats.lazy
             .filter({ isProgressiveMP4($0) })
             .compactMap({ usableURL(from: $0) })
-            .first {
+            .first
+        {
             return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
         }
 
@@ -158,16 +163,18 @@ struct StreamService {
         return .skip(reason: nil)
     }
 
-    private func post(videoId: String,
-                      client: AppConfig.Client,
-                      visitorData: String?) async throws -> [String: Any] {
+    private func post(
+        videoId: String,
+        client: AppConfig.Client,
+        visitorData: String?
+    ) async throws -> [String: Any] {
         try await InnerTubeClient.post(
             endpoint: "player",
             client: client,
             params: [
                 "videoId": videoId,
                 "contentCheckOk": true,
-                "racyCheckOk": true
+                "racyCheckOk": true,
             ],
             bearer: nil,
             visitorData: visitorData
@@ -178,7 +185,8 @@ struct StreamService {
 
     private func usableURL(from format: [String: Any]) -> URL? {
         guard let s = format["url"] as? String, !s.isEmpty,
-              let url = URL(string: s) else { return nil }
+            let url = URL(string: s)
+        else { return nil }
         return url
     }
 

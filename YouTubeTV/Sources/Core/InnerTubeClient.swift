@@ -23,11 +23,13 @@ enum InnerTubeClient {
     ///   - bearer: optional OAuth access token for authenticated calls.
     ///   - visitorData: optional session token, sent both in context.client and as
     ///     `X-Goog-Visitor-Id`. Required by some clients on `/player` — see `VisitorDataStore`.
-    static func post(endpoint: String,
-                     client: AppConfig.Client,
-                     params: [String: Any],
-                     bearer: String? = nil,
-                     visitorData: String? = nil) async throws -> [String: Any] {
+    static func post(
+        endpoint: String,
+        client: AppConfig.Client,
+        params: [String: Any],
+        bearer: String? = nil,
+        visitorData: String? = nil
+    ) async throws -> [String: Any] {
         let urlString = "\(client.host)/youtubei/v1/\(endpoint)?key=\(AppConfig.innerTubeAPIKey)&prettyPrint=false"
         guard let url = URL(string: urlString) else {
             throw InnerTubeError.invalidURL
@@ -52,7 +54,7 @@ enum InnerTubeClient {
             "clientName": client.name,
             "clientVersion": client.version,
             "hl": "en",
-            "gl": "US"
+            "gl": "US",
         ]
         for (k, v) in client.extraClientContext { clientContext[k] = v }
         if let visitorData { clientContext["visitorData"] = visitorData }
