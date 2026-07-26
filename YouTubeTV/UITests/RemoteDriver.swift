@@ -32,13 +32,16 @@ extension XCUIApplication {
         focusedElement?.label
     }
 
-    /// Waits until something holds focus, which also serves as a readiness check:
+    /// Waits until some element holds focus, which also serves as a readiness check:
     /// the feed grid only takes focus once the first page of videos has loaded.
-    @discardableResult
+    ///
+    /// Returns that element's label, which may be the empty string — not every
+    /// focusable view carries one, and an unlabelled element still counts as focus.
+    /// Returns nil only if nothing took focus before the timeout.
     func waitForFocus(timeout: TimeInterval = 30) -> String? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let label = focusedLabel, !label.isEmpty { return label }
+            if let element = focusedElement { return element.label }
             Thread.sleep(forTimeInterval: 0.25)
         }
         return nil

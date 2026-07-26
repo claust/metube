@@ -38,7 +38,9 @@ set -euo pipefail
 readonly ACTIVATION_SETTLE=0.5   # lets the raised window consume its focus event
 readonly RENDER_SETTLE=0.8       # SwiftUI focus animations before a screenshot
 
-usage() { sed -n '3,30p' "$0" | sed 's|^# \{0,1\}||'; }
+# Prints the header comment block as help. Runs to the first non-comment line
+# rather than a fixed range, so editing the header can't silently truncate it.
+usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
 
 key_code_for() {
     case "$1" in

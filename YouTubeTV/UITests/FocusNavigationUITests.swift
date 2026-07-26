@@ -14,11 +14,11 @@ final class FocusNavigationUITests: XCTestCase {
         // Both have a single focusable button, so directional navigation is vacuous —
         // skip rather than report a misleading failure. "Sign out" only exists on the
         // loaded feed, which makes it a reliable marker for "the grid is up".
-        app.waitForFocus()
+        let initialFocus = app.waitForFocus()
         guard app.buttons["Sign out"].waitForExistence(timeout: 10) else {
             throw XCTSkip(
                 "Home feed not loaded (signed out, or Config/Secrets.xcconfig has placeholder "
-                    + "credentials) — nothing to navigate. Focus was on: \(app.focusedLabel ?? "nothing")."
+                    + "credentials) — nothing to navigate. Focus was on: \(initialFocus ?? "nothing")."
             )
         }
     }
