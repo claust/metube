@@ -213,13 +213,35 @@ struct FeedService {
 
             let metadata = tile.value(at: "metadata/tileMetadataRenderer") as? [String: Any]
             let title = innerTubeText(metadata?["title"]) ?? ""
-            let author = tileAuthor(metadata) ?? ""
+            let parts = tileMetadataParts(metadata)
             let thumbURL = tileThumbnailURL(tile) ?? Self.fallbackThumbnail(videoId)
 
-            result.append(VideoItem(id: videoId, title: title, author: author, thumbnailURL: thumbURL))
+            result.append(
+                VideoItem(
+                    id: videoId,
+                    title: title,
+                    author: parts.author,
+                    thumbnailURL: thumbURL,
+                    publishedAt: parts.publishedAt,
+                    viewCount: parts.viewCount,
+                    duration: Self.durationOverlay(in: tile)
+                ))
         }
 
         return result
+    }
+
+    /// The running time YouTube stamps on the thumbnail. Both tiles and the older renderers
+    /// carry it as a `thumbnailOverlayTimeStatusRenderer`, nested at slightly different depths,
+    /// so this searches the subtree rather than naming a path. Live items carry the same
+    /// renderer with "LIVE" in it, which reads wrong next to a running time — skip those.
+    private static func durationOverlay(in json: [String: Any]) -> String {
+        for overlay in findAllRenderers(named: "thumbnailOverlayTimeStatusRenderer", in: json) {
+            guard let text = innerTubeText(overlay["text"]), !text.isEmpty else { continue }
+            guard text.contains(":") else { continue }
+            return text
+        }
+        return ""
     }
 
     private func tileVideoId(_ tile: [String: Any]) -> String? {
@@ -232,20 +254,44 @@ struct FeedService {
         return nil
     }
 
-    /// Digs the first available subtitle/author text out of the tile metadata lines.
-    private func tileAuthor(_ metadata: [String: Any]?) -> String? {
-        guard let lines = metadata?["lines"] as? [[String: Any]] else { return nil }
-        for line in lines {
-            guard let items = line.value(at: "lineRenderer/items") as? [[String: Any]] else { continue }
-            for item in items {
-                if let text = innerTubeText(item.value(at: "lineItemRenderer/text")),
-                    !text.isEmpty
-                {
-                    return text
-                }
+    /// Splits a tile's subtitle lines into the three things worth showing.
+    ///
+    /// Which slot holds what varies by shelf, and one slot often carries several values at once
+    /// ("1.2M views • 3 days ago"), so this flattens everything to bullet-separated fragments
+    /// and classifies each by shape: an age is whatever parses as one, the view count is
+    /// whatever mentions views, and the channel is the first fragment that is neither.
+    private func tileMetadataParts(_ metadata: [String: Any]?) -> TileMetadata {
+        let lines = metadata?["lines"] as? [[String: Any]] ?? []
+        let fragments =
+            lines
+            .flatMap { ($0.value(at: "lineRenderer/items") as? [[String: Any]]) ?? [] }
+            .compactMap { innerTubeText($0.value(at: "lineItemRenderer/text")) }
+            .flatMap { $0.split(whereSeparator: { "•·|".contains($0) }) }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        var author = ""
+        var viewCount = ""
+        var publishedAt: Date?
+
+        for fragment in fragments {
+            if let date = RelativeTime.parse(fragment) {
+                publishedAt = publishedAt ?? date
+            } else if fragment.range(of: "view", options: .caseInsensitive) != nil {
+                viewCount = viewCount.isEmpty ? fragment : viewCount
+            } else if author.isEmpty {
+                author = fragment
             }
         }
-        return nil
+
+        return TileMetadata(author: author, viewCount: viewCount, publishedAt: publishedAt)
+    }
+
+    /// The classified subtitle values of one tile.
+    private struct TileMetadata {
+        let author: String
+        let viewCount: String
+        let publishedAt: Date?
     }
 
     /// Picks the largest-width thumbnail from the tile header.
@@ -282,7 +328,20 @@ struct FeedService {
                 }
                 thumbURL = thumbURL ?? Self.fallbackThumbnail(videoId)
 
-                result.append(VideoItem(id: videoId, title: title, author: author, thumbnailURL: thumbURL))
+                // These renderers name the age and view count outright instead of burying them
+                // in subtitle lines. `shortViewCountText` is the abbreviated form ("1.2M views")
+                // the tile path also yields; `viewCountText` spells it out and is the fallback.
+                let published = innerTubeText(r["publishedTimeText"]).flatMap { RelativeTime.parse($0) }
+                let views =
+                    innerTubeText(r["shortViewCountText"]) ?? innerTubeText(r["viewCountText"]) ?? ""
+
+                // `lengthText` is this shape's own field; the overlay is the shared fallback.
+                let duration = innerTubeText(r["lengthText"]) ?? Self.durationOverlay(in: r)
+
+                result.append(
+                    VideoItem(
+                        id: videoId, title: title, author: author, thumbnailURL: thumbURL,
+                        publishedAt: published, viewCount: views, duration: duration))
             }
         }
 
