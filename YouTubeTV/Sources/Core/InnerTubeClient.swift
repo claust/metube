@@ -21,10 +21,13 @@ enum InnerTubeClient {
     ///   - client: which InnerTube client identity to use.
     ///   - params: endpoint params merged into the request body (e.g. ["browseId":"default"]).
     ///   - bearer: optional OAuth access token for authenticated calls.
+    ///   - visitorData: optional session token, sent both in context.client and as
+    ///     `X-Goog-Visitor-Id`. Required by some clients on `/player` — see `VisitorDataStore`.
     static func post(endpoint: String,
                      client: AppConfig.Client,
                      params: [String: Any],
-                     bearer: String? = nil) async throws -> [String: Any] {
+                     bearer: String? = nil,
+                     visitorData: String? = nil) async throws -> [String: Any] {
         let urlString = "\(client.host)/youtubei/v1/\(endpoint)?key=\(AppConfig.innerTubeAPIKey)&prettyPrint=false"
         guard let url = URL(string: urlString) else {
             throw InnerTubeError.invalidURL
@@ -41,6 +44,9 @@ enum InnerTubeClient {
         if let bearer {
             request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         }
+        if let visitorData {
+            request.setValue(visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
+        }
 
         var clientContext: [String: Any] = [
             "clientName": client.name,
@@ -49,6 +55,7 @@ enum InnerTubeClient {
             "gl": "US"
         ]
         for (k, v) in client.extraClientContext { clientContext[k] = v }
+        if let visitorData { clientContext["visitorData"] = visitorData }
 
         var body: [String: Any] = ["context": ["client": clientContext]]
         for (k, v) in params { body[k] = v }

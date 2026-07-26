@@ -11,6 +11,9 @@ struct PlayerView: View {
     @State private var player: AVPlayer?
     @State private var loadError: Error?
     @State private var isLoading = true
+    #if DEBUG
+    @State private var resolutionObservation: NSKeyValueObservation?
+    #endif
 
     var body: some View {
         ZStack {
@@ -81,10 +84,19 @@ struct PlayerView: View {
         defer { isLoading = false }
 
         do {
-            let url = try await StreamService().resolveStreamURL(videoId: video.id)
+            let stream = try await StreamService().resolveStream(videoId: video.id)
             // Only take over audio output once we actually have a playable stream.
             activateAudioSession()
-            let avPlayer = AVPlayer(url: url)
+            // The stream URLs are minted for a specific InnerTube client; the manifest host
+            // rejects requests whose User-Agent doesn't match, so pass it down to CoreMedia.
+            let asset = AVURLAsset(url: stream.url, options: [
+                "AVURLAssetHTTPHeaderFieldsKey": stream.httpHeaders
+            ])
+            let item = AVPlayerItem(asset: asset)
+            let avPlayer = AVPlayer(playerItem: item)
+            #if DEBUG
+            observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
+            #endif
             self.player = avPlayer
             avPlayer.play()
         } catch {
@@ -96,6 +108,23 @@ struct PlayerView: View {
             self.loadError = error
         }
     }
+
+    #if DEBUG
+    /// Logs the resolution actually being delivered. `presentationSize` is the ground truth —
+    /// for an HLS stream it updates on every ABR variant switch, so this shows the ladder
+    /// climbing rather than just the first variant chosen.
+    @MainActor
+    private func observeDeliveredResolution(of item: AVPlayerItem, adaptive: Bool) {
+        let kind = adaptive ? "HLS" : "progressive"
+        resolutionObservation = item.observe(\.presentationSize, options: [.initial, .new]) { item, _ in
+            let size = item.presentationSize
+            guard size != .zero else { return }
+            let bitrate = item.accessLog()?.events.last?.indicatedBitrate ?? 0
+            print(String(format: "[PlayerView] %@ delivering %dx%d (indicated %.1f Mbps)",
+                         kind, Int(size.width), Int(size.height), bitrate / 1_000_000))
+        }
+    }
+    #endif
 
     private func activateAudioSession() {
         let session = AVAudioSession.sharedInstance()
@@ -114,6 +143,10 @@ struct PlayerView: View {
     }
 
     private func teardown() {
+        #if DEBUG
+        resolutionObservation?.invalidate()
+        resolutionObservation = nil
+        #endif
         player?.pause()
         player = nil
         deactivateAudioSession()

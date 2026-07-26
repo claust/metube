@@ -36,11 +36,16 @@ Sign in by visiting the shown URL on your phone/computer and entering the code (
 - `Sources/Core` — InnerTube client, OAuth token store, models (shared contracts)
 - `Sources/Auth` — OAuth device-activation flow + `LoginView`
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
-- `Sources/Player` — ANDROID `player` stream resolve + `AVPlayerViewController`
+- `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController`
 - `reference/` — distilled InnerTube notes and captured sample responses
 
 ## Scope / limitations
 
-Intentionally minimal: no search, subscriptions, shorts, or ad blocking. Playback is 360p
-(the cipher-free muxed `itag 18` MP4 the ANDROID InnerTube client returns, so no JavaScript
-signature deciphering is needed). Age- or login-restricted videos surface a graceful message.
+Intentionally minimal: no search, subscriptions, shorts, or ad blocking.
+
+Playback uses the HLS multivariant playlist from the VISIONOS InnerTube client, which needs only
+a scraped `visitorData` token — no PO token and no JavaScript signature deciphering. AVFoundation
+handles variant selection and ABR, settling at **1080p60 H.264**. That is the ceiling on real
+hardware: YouTube publishes 1440p/2160p only in VP9 and AV1, and no shipping Apple TV can decode
+either. The ANDROID client (muxed `itag 18`, 360p) remains as a fallback. Age- or login-restricted
+videos surface a graceful message.
