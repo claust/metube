@@ -26,10 +26,42 @@ flow, shows your personalized Home recommendations, and plays videos natively wi
 xcodebuild -project YouTubeTV.xcodeproj -scheme YouTubeTV -sdk appletvsimulator \
   -destination 'name=Apple TV 4K (3rd generation)' -derivedDataPath build build
 xcrun simctl install booted build/Build/Products/Debug-appletvsimulator/YouTubeTV.app
-xcrun simctl launch booted com.prototype.youtubetv
+xcrun simctl launch booted dk.delectosoft.metube
 ```
 
 Sign in by visiting the shown URL on your phone/computer and entering the code (or scan the QR).
+
+## Run on a real Apple TV
+
+One-time setup:
+
+1. Sign into Xcode with your Apple ID (**Xcode → Settings → Apple Accounts**) so it can create a
+   provisioning profile, and set `DEVELOPMENT_TEAM` in your own `Config/Secrets.xcconfig`, then
+   re-run `xcodegen generate`. Your team ID is the `OU` field of your signing certificate:
+
+   ```sh
+   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   ```
+
+   (It is *not* the value in parentheses shown by `security find-identity` — that's the
+   certificate ID. Xcode also lists the team under **Settings → Apple Accounts**.)
+2. Pair the device: on the Apple TV open **Settings → Remote Apps and Devices**, then in Xcode
+   **Window → Devices and Simulators** select it under *Discovered* and enter the code shown on
+   the TV. The Mac and Apple TV must be on the same network.
+
+Then build and install (`DEVICE_ID` comes from `xcrun devicectl list devices`):
+
+```sh
+DEVICE_ID=<your-apple-tv-udid>
+xcodebuild -project YouTubeTV.xcodeproj -scheme YouTubeTV -sdk appletvos \
+  -destination "id=$DEVICE_ID" -derivedDataPath build-device -allowProvisioningUpdates build
+xcrun devicectl device install app --device "$DEVICE_ID" \
+  build-device/Build/Products/Debug-appletvos/YouTubeTV.app
+xcrun devicectl device process launch --device "$DEVICE_ID" dk.delectosoft.metube
+```
+
+On a free Apple developer account the installed app stops working after 7 days and must be
+reinstalled; a paid membership lasts a year.
 
 ## Structure
 

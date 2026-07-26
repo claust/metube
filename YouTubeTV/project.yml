@@ -1,6 +1,6 @@
 name: YouTubeTV
 options:
-  bundleIdPrefix: com.prototype.youtubetv
+  bundleIdPrefix: dk.delectosoft
   deploymentTarget:
     tvOS: "18.0"
   createIntermediateGroups: true
@@ -32,5 +32,9 @@ targets:
         YTOAuthClientSecret: $(YT_OAUTH_CLIENT_SECRET)
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.prototype.youtubetv
+        PRODUCT_BUNDLE_IDENTIFIER: dk.delectosoft.metube
         INFOPLIST_KEY_CFBundleDisplayName: YouTube TV
+        # Device builds use automatic signing; DEVELOPMENT_TEAM comes from
+        # Config/Secrets.xcconfig (gitignored) so each developer supplies their own.
+        # Simulator builds ignore both.
+        CODE_SIGN_STYLE: Automatic
