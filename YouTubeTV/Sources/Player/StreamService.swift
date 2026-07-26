@@ -51,8 +51,23 @@ struct StreamService {
 
         for client in [AppConfig.Client.visionOS, .android] {
             do {
-                if let stream = try await resolve(videoId: videoId, client: client) {
+                let outcome = try await resolve(videoId: videoId, client: client)
+                switch outcome {
+                case .stream(let stream):
                     return stream
+                case .skip(let reason):
+                    #if DEBUG
+                    print("[StreamService] \(client.name) skipped: \(reason ?? "nothing usable")")
+                    #endif
+                    // A gated client is a reason to try the next one, not to report — but if the
+                    // whole ladder ends up empty its explanation is the best we have, so keep it
+                    // rather than falling back to the generic `.noStream`. Statuses that gate a
+                    // client (LOGIN_REQUIRED, ERROR) are also what a genuinely unavailable video
+                    // returns from *every* client, e.g. "This video is unavailable" for a deleted
+                    // or private one, so this is the path that carries the real message.
+                    if firstFailure == nil, let reason, !reason.isEmpty {
+                        firstFailure = StreamError.notPlayable(reason)
+                    }
                 }
             } catch {
                 if Task.isCancelled { throw error }
@@ -60,7 +75,7 @@ struct StreamService {
                 print("[StreamService] \(client.name) failed: \(error.localizedDescription)")
                 #endif
                 // Keep the first failure: it comes from the preferred client and so carries the
-                // most meaningful reason (e.g. "Private video") to show if every client fails.
+                // most meaningful reason to show if every client fails.
                 if firstFailure == nil { firstFailure = error }
             }
         }
@@ -70,9 +85,15 @@ struct StreamService {
 
     // MARK: - Per-client resolution
 
-    /// Returns nil when the client answered successfully but had nothing playable to offer,
-    /// which means "try the next client". Throws when the video itself is unplayable.
-    private func resolve(videoId: String, client: AppConfig.Client) async throws -> ResolvedStream? {
+    /// What one client in the ladder had to offer.
+    private enum ClientOutcome {
+        case stream(ResolvedStream)
+        /// Nothing usable from this client — try the next. Carries YouTube's human-readable
+        /// explanation when there was one, so it can be surfaced if no client succeeds.
+        case skip(reason: String?)
+    }
+
+    private func resolve(videoId: String, client: AppConfig.Client) async throws -> ClientOutcome {
         var visitorData: String?
         if client.requiresVisitorData {
             visitorData = try await VisitorDataStore.shared.token()
@@ -88,24 +109,25 @@ struct StreamService {
             json = try await post(videoId: videoId, client: client, visitorData: visitorData)
         }
 
-        // Playability gate.
+        // Playability gate. Only ever surface YouTube's human-readable reason; internal status
+        // codes fall through to the generic friendly message instead of being shown to the user.
         let status = json.string(at: "playabilityStatus/status")
         if status != "OK" {
-            // A client-specific rejection (this client is gated, not the video) should fall
-            // through to the next client rather than being reported to the user.
-            if status == "LOGIN_REQUIRED" || status == "ERROR" { return nil }
-            // Only surface a human-readable reason; internal status codes fall through to the
-            // generic friendly message instead of being shown to the user.
             let reason = json.string(at: "playabilityStatus/reason")
                 ?? json.string(at: "playabilityStatus/errorScreen/playerErrorMessageRenderer/reason/simpleText")
                 ?? ""
+            // LOGIN_REQUIRED and ERROR are ambiguous: they are what a gated client returns, and
+            // also what an unavailable video returns from every client. Treat them as "try the
+            // next client" and pass the reason up, so the ladder can still fall back but the
+            // message survives if nothing works.
+            if status == "LOGIN_REQUIRED" || status == "ERROR" { return .skip(reason: reason) }
             throw StreamError.notPlayable(reason)
         }
 
         // 1) HLS multivariant playlist — adaptive, audio included, native quality UI.
         if let hls = json.string(at: "streamingData/hlsManifestUrl"),
            let url = URL(string: hls) {
-            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: true)
+            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: true))
         }
 
         // 2) Progressive (muxed audio+video) formats under streamingData.formats.
@@ -118,7 +140,7 @@ struct StreamService {
             .filter({ intValue($0["itag"]) == 18 })
             .compactMap({ usableURL(from: $0) })
             .first {
-            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false)
+            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
         }
 
         // Otherwise the first progressive MP4 that yields a usable url — a malformed url on one
@@ -127,12 +149,13 @@ struct StreamService {
             .filter({ isProgressiveMP4($0) })
             .compactMap({ usableURL(from: $0) })
             .first {
-            return ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false)
+            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
         }
 
         // Playable, but this client returned nothing we can use — typically SABR-only, where
-        // every format carries a serverAbrStreamingUrl instead of a plain url.
-        return nil
+        // every format carries a serverAbrStreamingUrl instead of a plain url. No reason to
+        // report: the video is fine, this client just can't serve it.
+        return .skip(reason: nil)
     }
 
     private func post(videoId: String,
