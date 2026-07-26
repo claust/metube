@@ -8,10 +8,13 @@ struct PlayerView: View {
     let video: VideoItem
     var onClose: () -> Void
 
+    @EnvironmentObject private var watchProgress: WatchProgressStore
+
     @State private var player: AVPlayer?
     @State private var loadError: Error?
     @State private var isLoading = true
     @State private var didPlayToEndObserver: NSObjectProtocol?
+    @State private var timeObserver: Any?
     #if DEBUG
     @State private var resolutionObservation: NSKeyValueObservation?
     #endif
@@ -102,7 +105,16 @@ struct PlayerView: View {
                 ])
             let item = AVPlayerItem(asset: asset)
             let avPlayer = AVPlayer(playerItem: item)
+            // Queued before the item is ready to play; AVPlayer applies it once it is, so the
+            // transport bar comes up already parked where the user left off.
+            if let resume = watchProgress.resumePosition(for: video.id) {
+                avPlayer.seek(
+                    to: CMTime(seconds: resume, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero,
+                    completionHandler: { _ in })
+            }
             observePlaybackEnd(of: item)
+            observePlaybackPosition(of: avPlayer)
             #if DEBUG
             observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
             #endif
@@ -127,13 +139,53 @@ struct PlayerView: View {
         // Capture onClose explicitly rather than self, which also holds the AVPlayer and
         // would otherwise be captured just to reach this one closure property.
         let onClose = onClose
+        let videoId = video.id
+        let watchProgress = watchProgress
+        let fallbackDuration = video.durationSeconds ?? 0
         didPlayToEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
-        ) { _ in
+        ) { notification in
+            MainActor.assumeIsolated {
+                // Watched through: the card keeps a full red line, and playing it again starts
+                // from the top rather than the last few seconds.
+                let duration = (notification.object as? AVPlayerItem)?.duration.seconds ?? .nan
+                watchProgress.markFinished(
+                    videoId: videoId,
+                    duration: duration.isFinite ? duration : fallbackDuration)
+            }
             onClose()
         }
+    }
+
+    /// Saves the playback position periodically, so a video abandoned by pulling the plug (or
+    /// by the app being killed) still resumes near where it was left.
+    @MainActor
+    private func observePlaybackPosition(of player: AVPlayer) {
+        removeTimeObserver(from: player)
+        let videoId = video.id
+        let fallbackDuration = video.durationSeconds ?? 0
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 5, preferredTimescale: 1),
+            queue: .main
+        ) { [weak player] time in
+            guard let player else { return }
+            MainActor.assumeIsolated {
+                let itemDuration = player.currentItem?.duration.seconds ?? .nan
+                watchProgress.record(
+                    videoId: videoId,
+                    position: time.seconds,
+                    duration: itemDuration.isFinite ? itemDuration : fallbackDuration)
+            }
+        }
+    }
+
+    @MainActor
+    private func removeTimeObserver(from player: AVPlayer) {
+        guard let timeObserver else { return }
+        player.removeTimeObserver(timeObserver)
+        self.timeObserver = nil
     }
 
     #if DEBUG
@@ -171,7 +223,18 @@ struct PlayerView: View {
         try? AVAudioSession.sharedInstance().setActive(false)
     }
 
+    @MainActor
     private func teardown() {
+        // The exact position at the moment of leaving — the periodic observer's last tick can
+        // be up to five seconds stale.
+        if let player, let item = player.currentItem {
+            let duration = item.duration.seconds
+            watchProgress.record(
+                videoId: video.id,
+                position: player.currentTime().seconds,
+                duration: duration.isFinite ? duration : (video.durationSeconds ?? 0))
+            removeTimeObserver(from: player)
+        }
         if let didPlayToEndObserver {
             NotificationCenter.default.removeObserver(didPlayToEndObserver)
             self.didPlayToEndObserver = nil
