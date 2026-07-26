@@ -20,10 +20,14 @@ extension XCUIApplication {
     ///
     /// tvOS focus can land on a button (a video card, "Sign out") or another focusable
     /// view, so this searches all descendants rather than a single element type.
+    /// The predicate does that filtering inside the query rather than materializing
+    /// every descendant first — on a feed of several hundred cards, the difference
+    /// between the two is most of the suite's runtime.
     var focusedElement: XCUIElement? {
-        descendants(matching: .any)
-            .allElementsBoundByIndex
-            .first { $0.exists && $0.hasFocus }
+        let focused = descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true"))
+            .firstMatch
+        return focused.exists ? focused : nil
     }
 
     /// Label of the focused element — the cheapest stable way to tell whether a
