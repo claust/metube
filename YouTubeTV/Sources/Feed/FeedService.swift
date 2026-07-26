@@ -61,10 +61,10 @@ struct FeedService {
         let token = sectionListContinuation(in: json)
 
         #if DEBUG
-        print("[FeedService] \(label): \(sections.count) shelves: " +
-              sections.map { "\($0.title.isEmpty ? "(untitled)" : $0.title)=\($0.items.count)" }
-                  .joined(separator: ", ") +
-              " | more: \(token != nil)")
+        print(
+            "[FeedService] \(label): \(sections.count) shelves: "
+                + sections.map { "\($0.title.isEmpty ? "(untitled)" : $0.title)=\($0.items.count)" }
+                .joined(separator: ", ") + " | more: \(token != nil)")
         #endif
 
         return FeedPage(sections: sections, continuation: token)
@@ -158,7 +158,7 @@ struct FeedService {
             "headerRenderer/shelfHeaderRenderer/title",
             "headerRenderer/gridHeaderRenderer/title",
             "header/shelfHeaderRenderer/title",
-            "title"
+            "title",
         ]
         for path in paths {
             if let text = innerTubeText(shelf.value(at: path)), !text.isEmpty {

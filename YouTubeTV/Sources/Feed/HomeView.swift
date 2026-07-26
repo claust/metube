@@ -171,7 +171,8 @@ struct HomeView: View {
     /// waiting for the genuinely last row would make the delay visible every time.
     private func prefetchIfNeeded(from section: FeedSection) {
         guard let index = sections.firstIndex(where: { $0.id == section.id }),
-              index >= sections.count - Self.prefetchDistance else { return }
+            index >= sections.count - Self.prefetchDistance
+        else { return }
         Task { await loadMore() }
     }
 
@@ -183,9 +184,11 @@ struct HomeView: View {
         defer { isLoadingMore = false }
 
         do {
-            guard let page = try await fetch({
-                try await FeedService().loadMore(continuation: token, accessToken: $0)
-            }) else { return }
+            guard
+                let page = try await fetch({
+                    try await FeedService().loadMore(continuation: token, accessToken: $0)
+                })
+            else { return }
 
             pagesLoaded += 1
             let fresh = newSections(in: page.sections)
