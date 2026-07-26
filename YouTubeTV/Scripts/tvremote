@@ -24,7 +24,10 @@
 #   Buttons:  up down left right select menu playpause
 #   Options:
 #     -s, --shot [PATH]   screenshot after the presses (default: $TMPDIR)
-#     -u, --udid UDID     target device (default: first booted tvOS simulator)
+#     -u, --udid UDID     target device (default: first booted tvOS simulator).
+#                         Key events go to that device's Simulator window, found
+#                         by device name — so two booted devices sharing a name
+#                         are rejected rather than guessed between.
 #     -d, --delay SEC     seconds between presses (default: 1.0)
 #     -h, --help          this text
 #
@@ -143,6 +146,39 @@ if ! pgrep -qf "Simulator.app/Contents/MacOS/Simulator"; then
     exit 1
 fi
 
+# Simulator window titles carry the device *name*, never the UDID, so that name
+# is the only handle for pointing key events at the same device the screenshot
+# comes from. Names are not unique — several "Apple TV 4K (3rd generation)"
+# devices can be booted at once — so refuse rather than guess when the booted set
+# is ambiguous. Guessing would steer one device while capturing another.
+# Cut at " (<udid>", not the first " (" — device names contain parentheses of
+# their own, e.g. "Apple TV 4K (3rd generation)".
+device_name=$(xcrun simctl list devices booted 2>/dev/null \
+    | awk -v u="$udid" 'index($0, u) { sub(/^ +/, ""); print substr($0, 1, index($0, " (" u) - 1); exit }')
+
+if [[ -z "$device_name" ]]; then
+    echo "tvremote: $udid is not a booted device." >&2
+    echo "  list them with: xcrun simctl list devices booted" >&2
+    exit 1
+fi
+
+# The name is interpolated into the AppleScript below; keep it to characters
+# real device names use so it can't become script syntax.
+if [[ ! "$device_name" =~ ^[A-Za-z0-9\ ().+-]+$ ]]; then
+    echo "tvremote: device name '$device_name' has unexpected characters; pass --udid" >&2
+    exit 1
+fi
+
+namesakes=$(xcrun simctl list devices booted 2>/dev/null \
+    | awk -v n="$device_name" 'index($0, n " (") { c++ } END { print c+0 }')
+
+if [[ "$namesakes" -gt 1 ]]; then
+    echo "tvremote: $namesakes booted devices are named '$device_name'." >&2
+    echo "  Window titles carry only the name, so the right window can't be identified." >&2
+    echo "  Shut down the duplicates, or rename one in Xcode's Devices window." >&2
+    exit 1
+fi
+
 # Raise the Apple TV window, then send the presses. Both steps live in one
 # osascript call so the window can't lose focus between them.
 #
@@ -154,8 +190,16 @@ tell application "Simulator" to activate
 delay $ACTIVATION_SETTLE
 tell application "System Events"
     tell process "Simulator"
-        set candidates to (every window whose name contains "Apple TV")
-        if (count of candidates) is 0 then error "no Apple TV simulator window"
+        -- Titles read "<device name> – <runtime>". Match the name plus that
+        -- separator first, so a device called "Apple TV" doesn't also match the
+        -- "Apple TV 4K ..." window; fall back to a plain prefix if Apple ever
+        -- changes the separator.
+        set candidates to (every window whose name starts with "$device_name –")
+        if (count of candidates) is 0 then
+            set candidates to (every window whose name starts with "$device_name")
+        end if
+        if (count of candidates) is 0 then error "no window titled \"$device_name\""
+        if (count of candidates) > 1 then error "several windows match \"$device_name\""
         perform action "AXRaise" of (item 1 of candidates)
         delay 0.3
         repeat $count times
