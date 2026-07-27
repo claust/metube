@@ -347,12 +347,15 @@ private struct FeedRow: View {
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: Metrics.cardSpacing) {
-                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
+                    ForEach(section.items) { item in
                         VideoCard(item: item) { onSelectVideo(item) }
                             // In a LazyHStack this runs as the card scrolls in, which is the
                             // point: paging starts while cards are still to the right of it.
+                            // The tail is a slice, so this stays cheap however long the row gets.
                             .onAppear {
-                                if index >= section.items.count - HomeView.itemPrefetchDistance {
+                                if section.items.suffix(HomeView.itemPrefetchDistance)
+                                    .contains(item)
+                                {
                                     onNeedMoreItems()
                                 }
                             }
