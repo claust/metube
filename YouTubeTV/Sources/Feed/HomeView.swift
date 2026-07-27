@@ -4,6 +4,10 @@ import SwiftUI
 /// The personalized Home feed: one horizontal, focusable row per YouTube shelf.
 /// Selection is delegated to the orchestrator via `onSelectVideo`.
 struct HomeView: View {
+    /// True while Home itself is the screen in front — no player, no Search over it. The
+    /// staleness check below only runs when this holds, and the button it can raise is only
+    /// reachable then anyway.
+    var isFrontmost: Bool
     /// Called when the user chooses a video. The orchestrator wires this to the player.
     var onSelectVideo: (VideoItem) -> Void
     /// Called when the user picks the search icon. The orchestrator wires this to `SearchView`.
@@ -14,6 +18,7 @@ struct HomeView: View {
 
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
@@ -27,6 +32,28 @@ struct HomeView: View {
     @State private var continuation: String?
     @State private var isLoadingMore = false
     @State private var pagesLoaded = 0
+
+    /// When Home's shelves last landed — the first page, or a pending page applied. `nil` until
+    /// the first load, which is what keeps the staleness check from firing before there is a
+    /// feed to compare against.
+    @State private var lastLoaded: Date?
+
+    /// A newer feed, fetched in the background and deliberately *not* applied.
+    ///
+    /// Swapping it in unprompted would move the ground under someone who just came back from a
+    /// video: shelf ids are fresh per load, so a swap rebuilds every row, and the card they
+    /// meant to play next — the one to the right of what they just watched — may not even be in
+    /// the new feed. So it waits behind a button in the header and the user picks the moment.
+    @State private var pendingPage: FeedPage?
+    /// How many of `pendingPage`'s videos aren't on screen yet. Drives the button's label, and
+    /// being zero is how we tell "the feed moved on" from "nothing has changed".
+    @State private var pendingNewCount = 0
+    /// Guards against a second background check while one is in flight.
+    @State private var isCheckingForNew = false
+
+    /// How old the feed has to be before a background check is worth a request. Home doesn't
+    /// turn over fast enough for anything shorter to find much.
+    private static let staleAfter: TimeInterval = 15 * 60
 
     /// Rows currently fetching more videos, by section id. Guards against the same row firing
     /// several requests while one is in flight — cards reappear constantly while scrolling.
@@ -61,6 +88,17 @@ struct HomeView: View {
                 await load()
             }
         }
+        // Coming back from a spell in another app is the safest moment to look: whatever the
+        // user was doing here, they left and returned to it.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { checkForNewVideosIfStale() }
+        }
+        // Returning from the player or Search is the one moment a refresh must never *apply* —
+        // but it is a fine moment to look, so the button is already waiting if the feed moved
+        // on while a long video played. `checkForNewVideos` only ever fills `pendingPage`.
+        .onChange(of: isFrontmost) { _, frontmost in
+            if frontmost { checkForNewVideosIfStale() }
+        }
     }
 
     @ViewBuilder
@@ -85,6 +123,19 @@ struct HomeView: View {
                         .font(.system(size: 56, weight: .bold))
                         .foregroundStyle(.white)
                     Spacer()
+                    // Only here once a background check has found something. It sits in the
+                    // header, which is only on screen at the top of the feed — so reaching it
+                    // already means the user has left whatever row they were in.
+                    if pendingNewCount > 0 {
+                        Button(action: applyPendingPage) {
+                            Label(
+                                pendingNewCount == 1 ? "1 new video" : "\(pendingNewCount) new videos",
+                                systemImage: "arrow.clockwise"
+                            )
+                            .font(.title3.weight(.semibold))
+                        }
+                        .accessibilityLabel("Show new videos")
+                    }
                     Button(action: onOpenSearch) {
                         Image(systemName: "magnifyingglass")
                             .font(.title2.weight(.semibold))
@@ -184,6 +235,10 @@ struct HomeView: View {
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            lastLoaded = .now
+            // A pending page fetched before this one is now older than what's on screen.
+            pendingPage = nil
+            pendingNewCount = 0
             // Section ids are fresh UUIDs on every load, so a reload (Retry, sign-in again)
             // would otherwise leave this state keyed to rows that no longer exist. The
             // supplementary feeds reload right after this, so one reset covers both lists.
@@ -221,6 +276,77 @@ struct HomeView: View {
                 // however the requests finish. A feed still pending contributes nothing yet.
                 extraSections = feeds.flatMap { loaded[$0] ?? [] }
             }
+        }
+    }
+
+    // MARK: - Refreshing
+
+    /// Starts a background check if the feed is old enough to be worth one.
+    ///
+    /// Deliberately not gated on where the user has scrolled to: the check never touches what's
+    /// on screen, so it is safe to run from anywhere in the feed, and by the time they scroll
+    /// back up the button is already there.
+    private func checkForNewVideosIfStale() {
+        guard isFrontmost, !isLoading, !isCheckingForNew, pendingPage == nil,
+            let lastLoaded, Date.now.timeIntervalSince(lastLoaded) > Self.staleAfter
+        else { return }
+        Task { await checkForNewVideos() }
+    }
+
+    /// Fetches Home's first page and parks it in `pendingPage` if it carries videos that aren't
+    /// on screen. Never touches `sections` — applying is `applyPendingPage`, and only the user
+    /// triggers that.
+    @MainActor
+    private func checkForNewVideos() async {
+        isCheckingForNew = true
+        defer { isCheckingForNew = false }
+
+        // A background check the user never asked for; failing it silently and trying again
+        // later is right. In particular it must not raise `errorMessage`, which would replace
+        // a perfectly good feed with an error screen.
+        guard
+            let page = try? await authStore.authorized({
+                try await FeedService().loadHome(accessToken: $0)
+            }) ?? nil
+        else { return }
+
+        let shown = Set((sections + extraSections).flatMap { $0.items.map(\.id) })
+        // Counted over a set: Home repeats the same video across shelves, and "3 new videos"
+        // should mean three of them.
+        let fresh = Set(page.sections.flatMap { $0.items.map(\.id) }).subtracting(shown)
+
+        guard !fresh.isEmpty else {
+            // Nothing new. Treat the feed as fresh again, or every return from a video would
+            // spend another request rediscovering that.
+            lastLoaded = .now
+            return
+        }
+
+        pendingPage = page
+        pendingNewCount = fresh.count
+    }
+
+    /// Swaps the pending feed in. Called only from the header button — see `pendingPage` for
+    /// why this never happens on its own.
+    @MainActor
+    private func applyPendingPage() {
+        guard let page = pendingPage else { return }
+        pendingPage = nil
+        pendingNewCount = 0
+
+        sections = page.sections
+        continuation = page.continuation
+        pagesLoaded = 1
+        lastLoaded = .now
+        // Same reason as the first load: every row id is new, so state keyed to the old ones
+        // would point at rows that no longer exist.
+        rowsLoadingMore = []
+        rowPagesLoaded = [:]
+
+        // Only Home was fetched; the Subscriptions and History rows below it are still the ones
+        // from the last load, so bring them up to date too. They land row by row, as on launch.
+        if let token = authStore.accessToken {
+            Task { await loadSupplementaryFeeds(accessToken: token) }
         }
     }
 
