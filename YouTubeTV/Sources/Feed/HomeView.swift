@@ -181,6 +181,11 @@ struct HomeView: View {
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            // Section ids are fresh UUIDs on every load, so a reload (Retry, sign-in again)
+            // would otherwise leave this state keyed to rows that no longer exist. The
+            // supplementary feeds reload right after this, so one reset covers both lists.
+            rowsLoadingMore = []
+            rowPagesLoaded = [:]
             return true
         } catch {
             if isCancellation(error) { return false }
@@ -284,8 +289,12 @@ struct HomeView: View {
                 })
             else { return }
 
-            rowPagesLoaded[id, default: 1] += 1
-            append(page.items, continuation: page.continuation, to: id)
+            // Only count the page if the row is still there. A reload during the request
+            // replaces every section, and re-keying this to a row that no longer exists would
+            // leak an entry the reset above can no longer reach.
+            if append(page.items, continuation: page.continuation, to: id) {
+                rowPagesLoaded[id, default: 1] += 1
+            }
         } catch {
             if isCancellation(error) { return }
             // Keep what's already in the row and stop paging it; the rest of the feed is fine.
@@ -297,9 +306,11 @@ struct HomeView: View {
         sections.first { $0.id == id } ?? extraSections.first { $0.id == id }
     }
 
-    /// Adds videos to the row with this id, in whichever list holds it.
+    /// Adds videos to the row with this id, in whichever list holds it. Returns `false` when
+    /// no such row is on screen any more — a reload replaced it while the request was in flight.
     @MainActor
-    private func append(_ items: [VideoItem], continuation: String?, to id: String) {
+    @discardableResult
+    private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
         func update(_ list: inout [FeedSection]) -> Bool {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
             let existing = Set(list[index].items.map(\.id))
@@ -314,8 +325,8 @@ struct HomeView: View {
             )
             return true
         }
-        if update(&sections) { return }
-        _ = update(&extraSections)
+        if update(&sections) { return true }
+        return update(&extraSections)
     }
 
     /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.
