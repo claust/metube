@@ -29,7 +29,9 @@ struct FeedService {
             sections[0] = FeedSection(
                 id: first.id, title: feed.title, items: first.items,
                 continuation: first.continuation)
-            result = FeedPage(sections: sections, continuation: result.continuation)
+            result = FeedPage(
+                sections: sections, continuation: result.continuation,
+                channelAvatars: result.channelAvatars)
         }
 
         return result
@@ -84,6 +86,7 @@ struct FeedService {
         }
 
         let token = sectionListContinuation(in: json)
+        let avatars = channelAvatars(in: json)
 
         #if DEBUG
         print(
@@ -95,7 +98,27 @@ struct FeedService {
                 .joined(separator: ", ") + " | more: \(token != nil)")
         #endif
 
-        return FeedPage(sections: sections, continuation: token)
+        return FeedPage(sections: sections, continuation: token, channelAvatars: avatars)
+    }
+
+    /// The channel pictures hiding in the Subscriptions response's filter bar.
+    ///
+    /// That bar is a `tvSecondaryNavRenderer` of `tabRenderer`s — "All" followed by one tab per
+    /// channel you follow, each with its name and its avatar in the usual size ladder
+    /// (48/88/176). Nothing else in a browse response pictures a channel, so this is where the
+    /// cards' avatars come from. Tabs are matched on having both a title and a thumbnail, which
+    /// skips "All" without hard-coding its label.
+    private func channelAvatars(in json: [String: Any]) -> [String: URL] {
+        var found: [String: URL] = [:]
+        for tab in findAllRenderers(named: "tabRenderer", in: json) {
+            guard let name = innerTubeText(tab["title"]) ?? tab["title"] as? String,
+                !name.isEmpty,
+                let thumbs = tab.value(at: "thumbnail/thumbnails") as? [[String: Any]],
+                let url = avatarURL(from: thumbs)
+            else { continue }
+            found[name] = url
+        }
+        return found
     }
 
     // MARK: - Continuation

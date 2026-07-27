@@ -13,6 +13,7 @@ struct HomeView: View {
     var onAddProfile: () -> Void
 
     @EnvironmentObject private var authStore: AuthStore
+    @EnvironmentObject private var channelAvatars: ChannelAvatarStore
 
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
@@ -204,16 +205,18 @@ struct HomeView: View {
         let feeds = Feed.allCases.filter { $0 != .home }
 
         var loaded: [Feed: [FeedSection]] = [:]
-        await withTaskGroup(of: (Feed, [FeedSection]).self) { group in
+        await withTaskGroup(of: (Feed, FeedPage?).self) { group in
             for feed in feeds {
                 group.addTask {
-                    let page = try? await FeedService().loadFeed(feed, accessToken: accessToken)
-                    return (feed, page?.sections ?? [])
+                    (feed, try? await FeedService().loadFeed(feed, accessToken: accessToken))
                 }
             }
-            for await (feed, sections) in group {
+            for await (feed, page) in group {
                 guard !Task.isCancelled else { return }
-                loaded[feed] = sections
+                loaded[feed] = page?.sections ?? []
+                // Subscriptions is the one response that pictures channels; the cards read the
+                // pictures back by name, so they light up as soon as this lands.
+                channelAvatars.merge(page?.channelAvatars ?? [:])
                 // Rebuild from `feeds` rather than appending, so rows land in declared order
                 // however the requests finish. A feed still pending contributes nothing yet.
                 extraSections = feeds.flatMap { loaded[$0] ?? [] }
