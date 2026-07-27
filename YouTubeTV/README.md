@@ -13,7 +13,15 @@ flow, shows your personalized Home recommendations, and plays videos natively wi
    ```
    These are the well-known **public** YouTube-on-TV OAuth credentials (the same ones SmartTube
    and yt-dlp use) plus the public InnerTube web API key — not per-user confidential secrets,
-   but kept in a gitignored file so nothing credential-shaped lands in the repo.
+   but kept in a gitignored file so nothing credential-shaped lands in this (public) repo.
+
+   Because it is gitignored, a fresh clone or a new git worktree starts without it, and a device
+   build then fails to sign (`DEVELOPMENT_TEAM` is empty). Keeping one copy outside any checkout
+   and symlinking to it saves redoing this each time:
+   ```sh
+   mkdir -p ~/.config/metube && chmod 600 ~/.config/metube/Secrets.xcconfig   # once, after filling it in
+   ln -sfn ~/.config/metube/Secrets.xcconfig Config/Secrets.xcconfig          # in each clone/worktree
+   ```
 3. Generate the Xcode project and build:
    ```sh
    xcodegen generate
