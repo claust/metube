@@ -106,7 +106,7 @@ struct HomeView: View {
                     ForEach(sections) { section in
                         FeedRow(
                             section: section, onSelectVideo: onSelectVideo,
-                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section) }
+                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
                         )
                         .onAppear { prefetchIfNeeded(from: section) }
                     }
@@ -121,7 +121,7 @@ struct HomeView: View {
                     ForEach(extraSections) { section in
                         FeedRow(
                             section: section, onSelectVideo: onSelectVideo,
-                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section) }
+                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
                         )
                     }
                 }
@@ -264,10 +264,13 @@ struct HomeView: View {
 
     /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
     /// only a handful of videos, so without this a row ends after five cards.
-    private func prefetchItemsIfNeeded(in section: FeedSection) {
-        guard section.continuation != nil, !rowsLoadingMore.contains(section.id) else { return }
-        guard (rowPagesLoaded[section.id] ?? 1) < Self.maxRowPages else { return }
-        Task { await loadMoreItems(in: section.id) }
+    /// Takes an id rather than the row itself: the caller's copy can be a page behind, and
+    /// acting on its token would spawn a Task for a row that is already exhausted.
+    private func prefetchItemsIfNeeded(in id: String) {
+        guard let section = section(withID: id), section.continuation != nil,
+            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
+        else { return }
+        Task { await loadMoreItems(in: id) }
     }
 
     /// Appends the next batch of videos to one row.
