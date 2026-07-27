@@ -108,7 +108,9 @@ private func parseTile(_ tile: [String: Any]) -> VideoItem? {
         id: videoId,
         title: innerTubeText(metadata?["title"]) ?? "",
         author: parts.author,
+        channelID: channelID(in: tile),
         thumbnailURL: tileThumbnailURL(tile) ?? fallbackThumbnail(videoId),
+        channelAvatarURL: channelAvatarURL(in: tile),
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
         duration: durationOverlay(in: tile)
@@ -153,7 +155,9 @@ private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
         id: videoId,
         title: metadata?.string(at: "title/content") ?? "",
         author: parts.author,
+        channelID: channelID(in: lockup),
         thumbnailURL: lockupThumbnailURL(lockup) ?? fallbackThumbnail(videoId),
+        channelAvatarURL: channelAvatarURL(in: lockup),
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
         duration: lockupDuration(lockup)
@@ -207,7 +211,9 @@ private func parseVideoRenderer(_ renderer: [String: Any]) -> VideoItem? {
         title: innerTubeText(renderer["title"]) ?? innerTubeText(renderer["headline"]) ?? "",
         author: innerTubeText(renderer.value(at: "longBylineText"))
             ?? innerTubeText(renderer.value(at: "shortBylineText")) ?? "",
+        channelID: channelID(in: renderer),
         thumbnailURL: thumbURL ?? fallbackThumbnail(videoId),
+        channelAvatarURL: channelAvatarURL(in: renderer),
         publishedAt: published,
         viewCount: views,
         // `lengthText` is this shape's own field; the overlay is the shared fallback.
@@ -266,6 +272,102 @@ private func durationOverlay(in json: [String: Any]) -> String {
         return text
     }
     return ""
+}
+
+/// The channel's avatar, found by what the URL looks like rather than by path.
+///
+/// Every cell shape buries it somewhere different — `channelThumbnailSupportedRenderers` on the
+/// old renderers, an `avatarViewModel` (sometimes wrapped in a `decoratedAvatarViewModel`) on
+/// lockups, and the TV tiles vary by shelf — but all of them serve avatars from Google's
+/// profile-picture hosts, which nothing else in a video cell uses. So this collects every image
+/// list in the cell and keeps the ones served from those hosts.
+///
+/// The `UC…` id of the channel a cell belongs to.
+///
+/// Every shape carries it as a `browseEndpoint`, but somewhere different each time — on the
+/// byline for the renderer shapes, and buried in the long-press menu's "Go to channel" item for
+/// the TV tiles — so this searches the cell for browse endpoints rather than naming a path. A
+/// channel id is the only `browseId` in a video cell that starts with `UC`; feed ids (`FEhistory`)
+/// and playlist ids don't, so the prefix is what separates them.
+private func channelID(in cell: [String: Any]) -> String? {
+    var found: String?
+    func walk(_ obj: Any) {
+        guard found == nil else { return }
+        if let dict = obj as? [String: Any] {
+            if let id = dict.string(at: "browseEndpoint/browseId"), id.hasPrefix("UC") {
+                found = id
+                return
+            }
+            // Sorted so the same response always yields the same id, in the rare cell that
+            // mentions two channels.
+            for key in dict.keys.sorted() { walk(dict[key] as Any) }
+        } else if let array = obj as? [Any] {
+            for value in array { walk(value) }
+        }
+    }
+    walk(cell)
+    return found
+}
+
+/// Returns `nil` when the cell carries no avatar at all — which is the common case: the TV
+/// feed's tiles never do, and their avatars come from `ChannelAvatarStore` instead.
+private func channelAvatarURL(in cell: [String: Any]) -> URL? {
+    var candidates: [[String: Any]] = []
+    func walk(_ obj: Any) {
+        if let dict = obj as? [String: Any] {
+            for key in ["thumbnails", "sources"] {
+                if let images = dict[key] as? [[String: Any]] { candidates.append(contentsOf: images) }
+            }
+            for value in dict.values { walk(value) }
+        } else if let array = obj as? [Any] {
+            for value in array { walk(value) }
+        }
+    }
+    walk(cell)
+
+    return avatarURL(from: candidates)
+}
+
+/// Picks the avatar to draw out of an image list, or `nil` if the list holds no avatar.
+///
+/// Avatars are recognised by host: they come from Google's profile-picture domains, which
+/// nothing else in a browse response uses. Sizes arrive as a ladder of squares (48/88/176) and
+/// the smallest one that still covers how big the card draws it wins — larger is wasted bytes
+/// across a screenful of cards, smaller goes soft.
+func avatarURL(from images: [[String: Any]]) -> URL? {
+    func width(_ image: [String: Any]) -> Int {
+        (image["width"] as? Int) ?? (image["width"] as? Double).map(Int.init) ?? 0
+    }
+
+    let avatars = images.filter { image in
+        guard let url = image["url"] as? String else { return false }
+        return url.contains("yt3.ggpht.com") || url.contains("yt3.googleusercontent.com")
+            || url.contains("/ytc/")
+    }
+    guard !avatars.isEmpty else { return nil }
+
+    let wanted = 176  // the 88pt circle at the TV's 2x scale
+    let best =
+        avatars.filter { width($0) >= wanted }.min { width($0) < width($1) }
+        ?? avatars.max { width($0) < width($1) }
+    guard var urlString = best?["url"] as? String, !urlString.isEmpty else { return nil }
+    if urlString.hasPrefix("//") { urlString = "https:" + urlString }
+    if width(best ?? [:]) < wanted { urlString = resized(urlString, to: wanted) }
+    return URL(string: urlString)
+}
+
+/// Asks Google's image CDN for a bigger render of the same avatar.
+///
+/// The size lives in the URL as an `=s72-c-k-…` suffix and the CDN honours whatever is asked
+/// for, which matters because a channel page only ever offers 72px — a quarter of what an 88pt
+/// circle needs on a TV, and visibly soft at that size. Returns the URL untouched if it doesn't
+/// carry a size token.
+private func resized(_ urlString: String, to size: Int) -> String {
+    guard let marker = urlString.range(of: "=s", options: .backwards) else { return urlString }
+    let digits = urlString[marker.upperBound...].prefix { $0.isNumber }
+    guard !digits.isEmpty else { return urlString }
+    return urlString.replacingCharacters(
+        in: marker.upperBound..<digits.endIndex, with: String(size))
 }
 
 /// Chooses the widest entry of an image array. Covers both the renderer shape

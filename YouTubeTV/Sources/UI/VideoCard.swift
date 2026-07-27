@@ -15,6 +15,7 @@ struct VideoCard: View {
     let action: () -> Void
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
+    @EnvironmentObject private var channelAvatars: ChannelAvatarStore
     @FocusState private var isFocused: Bool
 
     /// Shared by the focus panel and the thumbnail's top corners.
@@ -56,14 +57,26 @@ struct VideoCard: View {
             // ideal width far wider than the card, and an outer frame doesn't clamp it — the
             // caption spilled past the thumbnail and dragged the panel out with it.
             .frame(width: Metrics.cardWidth)
+            // Hung off the card's own bottom-right corner and trimmed by the clip below to about
+            // three quarters of the circle. A background rather than an overlay: the caption is
+            // the card's subject, so a title long enough to reach the corner runs over the
+            // avatar rather than under it.
+            .background(alignment: .bottomTrailing) { channelAvatar }
             // The one focus surface: a soft grey panel behind the whole card, in place of the
-            // white outline and the white plate that used to sit under the caption.
+            // white outline and the white plate that used to sit under the caption. Applied
+            // after the avatar so it stays behind it.
             .background(
                 RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                     .fill(isFocused ? Color(white: 0.86) : Color.clear)
             )
+            .clipShape(
+                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         }
         .buttonStyle(BareButtonStyle())
+        // Looks the channel's picture up the first time this card is drawn, if nothing already
+        // knows it. The store dedupes by channel and remembers the answer across launches, so a
+        // row of cards from one channel costs one request, once.
+        .task(id: item.id) { await channelAvatars.resolve(item) }
         .focusEffectDisabled()
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.08 : 1.0)
@@ -88,6 +101,41 @@ struct VideoCard: View {
             @unknown default:
                 Color.clear
             }
+        }
+    }
+
+    /// The channel's picture, hung off the card's bottom-right corner — below the thumbnail,
+    /// over the caption — so roughly three quarters of the circle shows and the rest runs off
+    /// the card, which does the cropping.
+    ///
+    /// Sitting the centre `inset` from each edge leaves ~75% of the disc inside the card: the
+    /// two clipped caps come to about a quarter of its area.
+    @ViewBuilder
+    private var channelAvatar: some View {
+        if let url = channelAvatars.url(for: item) {
+            let diameter: CGFloat = 88
+            let inset = diameter / 2 * 0.63
+
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                // No spinner and no grey disc: an avatar that pops in late is fine, one that
+                // pulses a placeholder on every row draws the eye away from the artwork.
+                Color.clear
+            }
+            .frame(width: diameter, height: diameter)
+            .clipShape(Circle())
+            // A hairline to hold the disc's edge against whichever surface is behind it —
+            // black unfocused, the grey focus panel otherwise.
+            .overlay(
+                Circle().strokeBorder(
+                    isFocused ? Color.black.opacity(0.15) : Color.white.opacity(0.3),
+                    lineWidth: 2)
+            )
+            // Held short of opaque so a long title running under it still reads. The avatar
+            // is a hint about the video, not a second subject.
+            .opacity(0.85)
+            .offset(x: diameter / 2 - inset, y: diameter / 2 - inset)
         }
     }
 

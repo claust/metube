@@ -5,7 +5,13 @@ struct VideoItem: Identifiable, Hashable {
     let id: String  // YouTube videoId
     let title: String
     let author: String
+    /// The channel's `UC…` id, when the cell carried one. What `ChannelAvatarStore` looks the
+    /// channel's picture up by.
+    let channelID: String?
     let thumbnailURL: URL?
+    /// The channel's round profile picture, when the cell carried one. Not every shelf sends it
+    /// — the TV feed's tiles often don't — so anything drawing it must cope with `nil`.
+    let channelAvatarURL: URL?
     /// When the video went up, approximated from InnerTube's "3 days ago" text at parse time
     /// (see `RelativeTime.parse`). `nil` when the feed gave no age — Shorts and some History
     /// rows don't.
@@ -18,13 +24,16 @@ struct VideoItem: Identifiable, Hashable {
     let duration: String
 
     init(
-        id: String, title: String, author: String = "", thumbnailURL: URL? = nil,
-        publishedAt: Date? = nil, viewCount: String = "", duration: String = ""
+        id: String, title: String, author: String = "", channelID: String? = nil,
+        thumbnailURL: URL? = nil, channelAvatarURL: URL? = nil, publishedAt: Date? = nil,
+        viewCount: String = "", duration: String = ""
     ) {
         self.id = id
         self.title = title
         self.author = author
+        self.channelID = channelID
         self.thumbnailURL = thumbnailURL
+        self.channelAvatarURL = channelAvatarURL
         self.publishedAt = publishedAt
         self.viewCount = viewCount
         self.duration = duration
@@ -91,4 +100,13 @@ struct FeedPage {
     let sections: [FeedSection]
     /// `nil` when YouTube has no more pages to give.
     let continuation: String?
+    /// Channel name → avatar, for whatever channels this response happened to picture. Only the
+    /// Subscriptions feed carries any; see `ChannelAvatarStore`.
+    let channelAvatars: [String: URL]
+
+    init(sections: [FeedSection], continuation: String?, channelAvatars: [String: URL] = [:]) {
+        self.sections = sections
+        self.continuation = continuation
+        self.channelAvatars = channelAvatars
+    }
 }
