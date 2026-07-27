@@ -110,12 +110,13 @@ final class SearchUITests: XCTestCase {
     private func openSearch() throws {
         let search = app.buttons["Search"]
 
-        // Focus starts on the first card of the top row; up lands in the header. The
-        // header holds Search and Sign out, so at most one further press is needed —
-        // but which one takes focus depends on the focus engine's memory, so nudge
-        // rather than assume.
+        // Focus starts on the first card of the top row; up lands in the header. Search
+        // is the leftmost control there, with the profile avatars and the plus to its
+        // right, so walking left reaches it — but which control takes focus first depends
+        // on the focus engine's memory, so nudge rather than assume. The bound covers a
+        // header with several profiles signed in.
         RemoteDriver.press(.up)
-        for _ in 0..<3 where !search.hasFocus {
+        for _ in 0..<6 where !search.hasFocus {
             RemoteDriver.press(.left)
         }
 

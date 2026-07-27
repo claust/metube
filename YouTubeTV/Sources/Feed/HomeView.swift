@@ -8,6 +8,9 @@ struct HomeView: View {
     var onSelectVideo: (VideoItem) -> Void
     /// Called when the user picks the search icon. The orchestrator wires this to `SearchView`.
     var onOpenSearch: () -> Void
+    /// Called when the user picks the plus in the profile bar. The orchestrator wires this to
+    /// the sign-in screen.
+    var onAddProfile: () -> Void
 
     @EnvironmentObject private var authStore: AuthStore
 
@@ -73,8 +76,7 @@ struct HomeView: View {
                     }
                     // The glyph carries no text, so name it for VoiceOver and the UI tests.
                     .accessibilityLabel("Search")
-                    Button("Sign out") { authStore.logout() }
-                        .foregroundStyle(.white)
+                    ProfileBar(onAddProfile: onAddProfile)
                 }
                 .padding(.horizontal, Metrics.horizontalInset)
                 .padding(.top, 20)

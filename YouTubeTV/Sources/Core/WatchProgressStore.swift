@@ -7,6 +7,10 @@ import SwiftUI
 /// Persisted in UserDefaults rather than the Keychain: a playback position is not a secret,
 /// and unlike the OAuth tokens it is cheap to lose. Injected as an @EnvironmentObject so cards
 /// redraw as soon as the player writes a new position.
+///
+/// History belongs to a profile, not to the device, so entries are stored under a per-profile
+/// key and the store is pointed at the active one with `activate(profileID:)`. With no profile
+/// active there is nothing to read and nowhere to write.
 @MainActor
 final class WatchProgressStore: ObservableObject {
 
@@ -31,17 +35,51 @@ final class WatchProgressStore: ObservableObject {
     private static let endThreshold: TimeInterval = 20
 
     private let defaults: UserDefaults
-    private let storageKey = "yt.watchProgress"
+    /// Whose history is loaded, and `nil` when nobody is signed in.
+    private var profileID: String?
     /// The write in flight, so the next one can queue behind it (see `persist`).
     private var persistTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        if let data = defaults.data(forKey: storageKey),
+    }
+
+    // MARK: - Profiles
+
+    /// Points the store at a profile's history, replacing whatever was loaded. Pass `nil` when
+    /// the last profile signs out, so the feed can't keep drawing the departed user's progress.
+    func activate(profileID: String?) {
+        guard profileID != self.profileID else { return }
+        self.profileID = profileID
+        entries = profileID.map { Self.load(profileID: $0, defaults: defaults) } ?? [:]
+    }
+
+    /// Key under which one profile's history is stored. Kept in one place because the migration
+    /// and deletion helpers, which run without an instance, have to agree with `persist`.
+    private static func storageKey(profileID: String) -> String { "yt.watchProgress.\(profileID)" }
+
+    private static func load(profileID: String, defaults: UserDefaults) -> [String: Entry] {
+        guard let data = defaults.data(forKey: storageKey(profileID: profileID)),
             let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
-        {
-            entries = decoded
+        else { return [:] }
+        return decoded
+    }
+
+    /// Hands the pre-profiles build's single, un-namespaced history to the profile its login
+    /// became. Does nothing once that profile has a history of its own, so a rerun can't
+    /// resurrect stale entries over newer ones.
+    static func adoptLegacyEntries(profileID: String, defaults: UserDefaults = .standard) {
+        let legacyKey = "yt.watchProgress"
+        guard let data = defaults.data(forKey: legacyKey) else { return }
+        if defaults.data(forKey: storageKey(profileID: profileID)) == nil {
+            defaults.set(data, forKey: storageKey(profileID: profileID))
         }
+        defaults.removeObject(forKey: legacyKey)
+    }
+
+    /// Erases a profile's history — used when the user signs that profile out for good.
+    static func discardEntries(profileID: String, defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: storageKey(profileID: profileID))
     }
 
     // MARK: - Reading
@@ -70,6 +108,7 @@ final class WatchProgressStore: ObservableObject {
     /// A video with no duration from either the player or the feed tile records nothing: it is
     /// a live stream, where "where you left off" has no meaning and no fraction could be drawn.
     func record(videoId: String, position: TimeInterval, duration: TimeInterval) {
+        guard profileID != nil else { return }
         guard position.isFinite, position >= Self.minimumPosition else { return }
         guard duration.isFinite, duration > 0 else { return }
         let reached = position >= duration - Self.endThreshold ? duration : position
@@ -80,6 +119,7 @@ final class WatchProgressStore: ObservableObject {
     /// Marks the video as watched through — a full red line on the card, and playback that
     /// starts over next time.
     func markFinished(videoId: String, duration: TimeInterval) {
+        guard profileID != nil else { return }
         let known = duration.isFinite && duration > 0 ? duration : (entries[videoId]?.duration ?? 0)
         // With no duration from anywhere there is no fraction to draw, so there is nothing
         // meaningful to store either.
@@ -100,9 +140,12 @@ final class WatchProgressStore: ObservableObject {
     /// Writes are chained rather than merely detached: two overlapping tasks could otherwise
     /// finish out of order and leave the older snapshot on disk.
     private func persist() {
+        // Captured now, not inside the task: by the time it runs the user may have switched
+        // profiles, and this snapshot belongs to the one that was active when it was taken.
+        guard let profileID else { return }
         let snapshot = entries
         let defaults = defaults
-        let key = storageKey
+        let key = Self.storageKey(profileID: profileID)
         let previous = persistTask
         persistTask = Task.detached(priority: .utility) {
             await previous?.value
