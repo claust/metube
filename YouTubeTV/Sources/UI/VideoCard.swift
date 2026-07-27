@@ -12,11 +12,26 @@ enum Metrics {
 /// A single focusable video thumbnail card.
 struct VideoCard: View {
     let item: VideoItem
+    /// Holding Select on the focused card. The screen showing the cards puts a menu up —
+    /// go to channel, subscribe or unsubscribe. Cards that aren't given one just play.
+    var onLongPress: (() -> Void)?
     let action: () -> Void
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
     @FocusState private var isFocused: Bool
+
+    /// Counts out the hold while Select is down, and is cancelled by the release.
+    @State private var holdTask: Task<Void, Never>?
+
+    /// Whether the press currently in progress has already become a long press. A tvOS Button
+    /// still fires on release, so without this the menu would open and the player would come
+    /// up over it. Cleared at the start of every press, so a hold whose release never reached
+    /// the button can't swallow the next one.
+    @State private var didLongPress = false
+
+    /// How long Select has to be held for the menu rather than the video.
+    private static let longPressDuration = Duration.milliseconds(500)
 
     /// Shared by the focus panel and the thumbnail's top corners.
     private static let cornerRadius: CGFloat = 16
@@ -26,7 +41,7 @@ struct VideoCard: View {
     private static let subtitleFont: Font = .system(size: 22, weight: .medium)
 
     var body: some View {
-        Button(action: action) {
+        Button(action: play) {
             // No spacing or outer padding: the thumbnail runs the full width of the focus
             // panel and butts against its top and side edges, so focusing genuinely enlarges
             // the image rather than framing it.
@@ -72,7 +87,7 @@ struct VideoCard: View {
             .clipShape(
                 RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         }
-        .buttonStyle(BareButtonStyle())
+        .buttonStyle(BareButtonStyle(onPressingChanged: pressingChanged))
         // Looks the channel's picture up the first time this card is drawn, if nothing already
         // knows it. The store dedupes by channel and remembers the answer across launches, so a
         // row of cards from one channel costs one request, once.
@@ -82,6 +97,34 @@ struct VideoCard: View {
         .scaleEffect(isFocused ? 1.08 : 1.0)
         .shadow(color: .black.opacity(isFocused ? 0.6 : 0), radius: 20)
         .animation(.easeInOut(duration: 0.15), value: isFocused)
+        // Nothing is left holding the card once it scrolls out of a lazy row, so a hold that
+        // was in progress would otherwise open a menu for a card nobody is on any more.
+        .onDisappear { holdTask?.cancel() }
+    }
+
+    /// Select going down and coming up on the focused card.
+    ///
+    /// This is the button's own pressed state rather than a long-press gesture: on tvOS a
+    /// Button consumes the Select press itself, so a gesture attached to it never recognizes —
+    /// the hold silently arrives as an ordinary tap on release (verified on-device). The
+    /// pressed state is the same signal the button acts on, so it can't be missed the same way.
+    private func pressingChanged(_ isPressing: Bool) {
+        holdTask?.cancel()
+        guard isPressing, onLongPress != nil else { return }
+        didLongPress = false
+        holdTask = Task {
+            guard (try? await Task.sleep(for: Self.longPressDuration)) != nil else { return }
+            // The menu opens under the finger, while Select is still down — which is what makes
+            // it read as a long press rather than as a delayed reaction to letting go.
+            didLongPress = true
+            onLongPress?()
+        }
+    }
+
+    /// Opens the video, unless this press already opened the card's menu.
+    private func play() {
+        guard !didLongPress else { return }
+        action()
     }
 
     /// The artwork itself. `scaledToFill` overflows the 16:9 box it sits in; the card's
@@ -224,8 +267,15 @@ struct VideoCard: View {
 /// wider than the card, that also washes the content with a specular highlight. That platter
 /// was the margin around the thumbnail. With this style the card's own grey panel is the whole
 /// focus treatment, so the artwork reaches its edges.
+/// It also reports the press itself, which is the only way the card sees Select go down: the
+/// button's action arrives on release, and a long-press gesture on tvOS never arrives at all.
 private struct BareButtonStyle: ButtonStyle {
+    var onPressingChanged: ((Bool) -> Void)?
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                onPressingChanged?(isPressed)
+            }
     }
 }

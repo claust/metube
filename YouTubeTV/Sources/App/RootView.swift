@@ -6,6 +6,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var watchProgress: WatchProgressStore
+    @EnvironmentObject private var subscriptions: SubscriptionStore
     @State private var selectedVideo: VideoItem?
     @State private var path: [Destination] = []
     @State private var isAddingProfile = false
@@ -15,6 +16,9 @@ struct RootView: View {
     /// pops back to Home for free, which is what a tvOS user expects.
     private enum Destination: Hashable {
         case search
+        /// A channel, carrying the name of the card it was opened from so the screen has a
+        /// heading before its own header arrives.
+        case channel(id: String, title: String)
     }
 
     var body: some View {
@@ -29,6 +33,9 @@ struct RootView: View {
         // first appear, which is what loads the history at launch.
         .onChange(of: authStore.activeProfileID, initial: true) { _, profileID in
             watchProgress.activate(profileID: profileID)
+            // Subscriptions belong to an account just as history does, so the card menus follow
+            // the active profile rather than showing the previous one's Subscribe/Unsubscribe.
+            subscriptions.activate(profileID: profileID)
             // Switching profiles (or signing the last one out) swaps the view but not this
             // state, so without resetting it a session that ended mid-search would reopen
             // straight into Search — or re-present the previous profile's video.
@@ -48,12 +55,20 @@ struct RootView: View {
             HomeView(
                 onSelectVideo: { selectedVideo = $0 },
                 onOpenSearch: { path.append(.search) },
-                onAddProfile: { isAddingProfile = true }
+                onAddProfile: { isAddingProfile = true },
+                onOpenChannel: openChannel
             )
             .navigationDestination(for: Destination.self) { destination in
                 switch destination {
                 case .search:
-                    SearchView(onSelectVideo: { selectedVideo = $0 })
+                    SearchView(onSelectVideo: { selectedVideo = $0 }, onOpenChannel: openChannel)
+                case .channel(let id, let title):
+                    ChannelView(
+                        channelID: id,
+                        fallbackTitle: title,
+                        onSelectVideo: { selectedVideo = $0 },
+                        onOpenChannel: openChannel
+                    )
                 }
             }
         }
@@ -67,5 +82,12 @@ struct RootView: View {
                     selectedVideo = nil
                 })
         }
+    }
+
+    /// Pushes the channel a card came from. A card whose cell never linked one can't get here —
+    /// the menu doesn't offer the option — so this quietly does nothing in that case.
+    private func openChannel(_ video: VideoItem) {
+        guard let channelID = video.channelID else { return }
+        path.append(.channel(id: channelID, title: video.author))
     }
 }

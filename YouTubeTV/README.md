@@ -49,6 +49,23 @@ Each profile keeps its own OAuth tokens (Keychain) and its own watch progress, s
 history and resume positions are whatever that account sees. Signing a profile out deletes its
 watch progress along with its credentials.
 
+## Card menu — channels and subscriptions (prototype)
+
+Holding **Select** on a card in Home or Search opens a menu for the video's channel:
+
+- **Go to channel** — pushes a channel screen: avatar, name, a Subscribe/Unsubscribe button, and
+  the channel's own shelves. Only the first page of shelves loads; rows still page sideways.
+- **Subscribe** / **Unsubscribe** — labelled by where the account currently stands with that
+  channel, and applied straight away, with the local state rolled back if YouTube refuses.
+
+Subscriptions are cached per profile (UserDefaults) so the first menu is labelled without a
+round-trip, and refreshed from `FEchannels` each time the feed loads. A card whose cell didn't
+link a channel — some Shorts and History rows — says so instead of offering the two actions.
+
+The InnerTube calls behind this (`subscription/subscribe`, `subscription/unsubscribe`,
+`FEchannels`, channel `browse`) are implemented from SmartTube's request shapes and have **not**
+been verified against a live account yet.
+
 ## Run on a real Apple TV
 
 One-time setup:

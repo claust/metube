@@ -6,7 +6,8 @@ struct VideoItem: Identifiable, Hashable {
     let title: String
     let author: String
     /// The channel's `UC…` id, when the cell carried one. What `ChannelAvatarStore` looks the
-    /// channel's picture up by.
+    /// channel's picture up by, and what the card's menu needs for both of its actions — a cell
+    /// without one offers neither "Go to channel" nor the subscribe toggle.
     let channelID: String?
     let thumbnailURL: URL?
     /// The channel's round profile picture, when the cell carried one. Not every shelf sends it
@@ -93,6 +94,18 @@ enum Feed: CaseIterable {
         case .history: return "Continue watching"
         }
     }
+}
+
+/// A channel's browse page: who it is, and its shelves in the same shape as any feed's.
+struct ChannelPage {
+    /// The channel's name. Empty when the header didn't carry one, in which case the caller
+    /// falls back to the name on the card the user came from.
+    let title: String
+    let avatarURL: URL?
+    /// Whether the account subscribes, per the page's own subscribe button. `nil` when the page
+    /// carried no button — not the same as "no", so callers must leave their state alone.
+    let isSubscribed: Bool?
+    let feed: FeedPage
 }
 
 /// One page of the feed: its shelves plus the token that fetches the next page, if any.
