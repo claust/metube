@@ -161,22 +161,58 @@ final class AuthStore: ObservableObject {
     /// carried over from the single-account build, or one added while the account lookup was
     /// unreachable. Runs once per launch; a profile that already has its details costs nothing.
     func backfillAccountInfo() async {
-        for profile in profiles where profile.accountKey == nil {
-            guard let token = accessTokens[profile.id] else { continue }
+        // Over a snapshot of ids, not the live array: each pass awaits the network and then
+        // rewrites `profiles`, so the list this started from is stale by the second iteration.
+        for profileID in profiles.filter({ $0.accountKey == nil }).map(\.id) {
+            guard let token = accessTokens[profileID] else { continue }
             var info = try? await AccountService().loadAccount(accessToken: token)
             // An expired access token is the likeliest reason this failed, and it would fail
             // again on every launch until something else happened to refresh it.
-            if info == nil, await renewTokens(for: profile.id), let retryToken = accessTokens[profile.id] {
+            if info == nil, await renewTokens(for: profileID), let retryToken = accessTokens[profileID] {
                 info = try? await AccountService().loadAccount(accessToken: retryToken)
             }
-            // Re-read the profile rather than mutating the loop's copy: the refresh above, or a
-            // sign-out while this was in flight, may have moved on without it.
-            guard let info, var updated = profiles.first(where: { $0.id == profile.id }) else { continue }
-            updated.accountKey = info.key
-            updated.displayName = info.name
-            updated.avatarURL = info.avatarURL
-            upsert(updated)
+            // Re-read the profile: the refresh above, or a sign-out while this was in flight,
+            // may have moved on without it.
+            guard let info, let profile = profiles.first(where: { $0.id == profileID }) else { continue }
+            apply(info, to: profile)
         }
+    }
+
+    /// Records who a profile turned out to belong to, moving it onto the id derived from that
+    /// account if it isn't already there.
+    ///
+    /// Only the login carried over from the single-account build ever moves: it is created
+    /// before there is anything to ask, so it starts on a random id. Left there it would never
+    /// find its own watch history again after a sign-out, because signing back in derives the
+    /// id from the account.
+    private func apply(_ info: AccountInfo, to profile: Profile) {
+        let newID = adoptDerivedID(for: profile, accountKey: info.key)
+        let wasActive = profile.id == activeProfileID
+        upsert(
+            Profile(id: newID, accountKey: info.key, displayName: info.name, avatarURL: info.avatarURL))
+        // Re-point the app (and with it the watch-progress store) at the moved profile.
+        if newID != profile.id, wasActive { activate(newID) }
+    }
+
+    /// Moves a profile's credentials and watch history onto its account-derived id, and returns
+    /// the id it now lives under. Declines — returning the id unchanged — when the profile is
+    /// already there, or when another profile holds the derived id and moving would clobber it.
+    private func adoptDerivedID(for profile: Profile, accountKey: String) -> String {
+        let newID = Profile.id(for: accountKey)
+        guard newID != profile.id, !profiles.contains(where: { $0.id == newID }) else {
+            return profile.id
+        }
+
+        for (old, new) in [(accessKey(profile.id), accessKey(newID)), (refreshKey(profile.id), refreshKey(newID))] {
+            KeychainStore.set(KeychainStore.get(old), for: new)
+            KeychainStore.delete(old)
+        }
+        accessTokens[newID] = accessTokens.removeValue(forKey: profile.id)
+        refreshTokens[newID] = refreshTokens.removeValue(forKey: profile.id)
+        WatchProgressStore.moveEntries(from: profile.id, to: newID, defaults: defaults)
+
+        profiles.removeAll { $0.id == profile.id }
+        return newID
     }
 
     // MARK: - Persistence

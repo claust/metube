@@ -77,6 +77,14 @@ final class WatchProgressStore: ObservableObject {
         defaults.removeObject(forKey: legacyKey)
     }
 
+    /// Carries a profile's history over when it changes id — which happens once, to the login
+    /// migrated from the single-account build, as soon as we learn which account it is.
+    static func moveEntries(from oldID: String, to newID: String, defaults: UserDefaults = .standard) {
+        guard let data = defaults.data(forKey: storageKey(profileID: oldID)) else { return }
+        defaults.set(data, forKey: storageKey(profileID: newID))
+        defaults.removeObject(forKey: storageKey(profileID: oldID))
+    }
+
     /// Erases a profile's history — used when the user signs that profile out for good.
     static func discardEntries(profileID: String, defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: storageKey(profileID: profileID))
