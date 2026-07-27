@@ -370,10 +370,11 @@ private func resized(_ urlString: String, to size: Int) -> String {
         in: marker.upperBound..<digits.endIndex, with: String(size))
 }
 
-/// Chooses the widest entry of an image array. Covers both the renderer shape
+/// Chooses the widest entry of an image array. Shared with the channel header, which picks an
+/// avatar the same way. Covers both the renderer shape
 /// (`thumbnails[]`) and the view-model shape (`image.sources[]`), which agree on
 /// `url`/`width` even though nothing else about them matches.
-private func largestThumbnailURL(_ thumbs: [[String: Any]]) -> URL? {
+func largestThumbnailURL(_ thumbs: [[String: Any]]) -> URL? {
     let best = thumbs.max { a, b in
         let wa = (a["width"] as? Int) ?? (a["width"] as? Double).map(Int.init) ?? 0
         let wb = (b["width"] as? Int) ?? (b["width"] as? Double).map(Int.init) ?? 0

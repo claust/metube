@@ -5,6 +5,7 @@ struct YouTubeTVApp: App {
     @StateObject private var authStore: AuthStore
     @StateObject private var watchProgress: WatchProgressStore
     @StateObject private var channelAvatars = ChannelAvatarStore()
+    @StateObject private var subscriptions = SubscriptionStore()
 
     /// Built here rather than with property initialisers because the two are connected: the
     /// profile store tells the progress store when a profile's history is migrated, moved or
@@ -29,6 +30,7 @@ struct YouTubeTVApp: App {
                 .environmentObject(authStore)
                 .environmentObject(watchProgress)
                 .environmentObject(channelAvatars)
+                .environmentObject(subscriptions)
         }
     }
 }
