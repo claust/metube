@@ -20,6 +20,10 @@ struct VideoCard: View {
     /// Shared by the focus panel and the thumbnail's top corners.
     private static let cornerRadius: CGFloat = 16
 
+    /// The channel line and the stats line bracket the title in the same small type, so the
+    /// caption reads as one block with the title as its only emphasis.
+    private static let subtitleFont: Font = .system(size: 22, weight: .medium)
+
     var body: some View {
         Button(action: action) {
             // No spacing or outer padding: the thumbnail runs the full width of the focus
@@ -34,7 +38,7 @@ struct VideoCard: View {
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .overlay { thumbnail }
-                    .overlay(alignment: .bottomTrailing) { channelBadge }
+                    .overlay(alignment: .bottomTrailing) { durationBadge }
                     .overlay(alignment: .bottom) { progressBar }
                     // Only the top corners are rounded — the bottom edge meets the caption,
                     // and matching the panel's radius keeps the two reading as one surface.
@@ -87,13 +91,15 @@ struct VideoCard: View {
         }
     }
 
-    /// The channel, tucked into the corner of the thumbnail. Its own dark pill rather than bare
-    /// text — thumbnails are arbitrary images, so nothing else guarantees contrast under it.
+    /// The running time, tucked into the corner of the thumbnail where YouTube itself puts it.
+    /// Its own dark pill rather than bare text — thumbnails are arbitrary images, so nothing
+    /// else guarantees contrast under it.
     @ViewBuilder
-    private var channelBadge: some View {
-        if !item.author.isEmpty {
-            Text(item.author)
+    private var durationBadge: some View {
+        if !item.duration.isEmpty {
+            Text(item.duration)
                 .font(.system(size: 18, weight: .semibold))
+                .monospacedDigit()
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .padding(.horizontal, 10)
@@ -121,11 +127,18 @@ struct VideoCard: View {
         }
     }
 
-    /// Title, then views and age on a line of their own. Text goes black on focus, against the
-    /// grey panel behind the card — white-on-black beside a lit thumbnail is the hardest thing
-    /// on the row to read.
+    /// Channel, then title, then views and age on a line of their own. Text goes black on focus,
+    /// against the grey panel behind the card — white-on-black beside a lit thumbnail is the
+    /// hardest thing on the row to read.
     private var caption: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if !item.author.isEmpty {
+                Text(item.author)
+                    .font(Self.subtitleFont)
+                    .foregroundStyle(isFocused ? Color.black.opacity(0.6) : Color.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+
             Text(item.title)
                 .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(isFocused ? .black : .white)
@@ -134,23 +147,24 @@ struct VideoCard: View {
 
             if !stats.isEmpty {
                 Text(stats)
-                    .font(.caption)
+                    .font(Self.subtitleFont)
                     .foregroundStyle(isFocused ? Color.black.opacity(0.6) : Color.white.opacity(0.6))
                     .lineLimit(1)
             }
         }
-        // Room for two title lines plus the stats line, so a short title doesn't shrink the
-        // card below its neighbours and leave the row's focus panels ragged.
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        // Room for the channel line, two title lines and the stats line, so a short title
+        // doesn't shrink the card below its neighbours and leave the row's focus panels ragged.
+        .frame(maxWidth: .infinity, minHeight: 122, alignment: .topLeading)
         .padding(.horizontal, 14)
         .padding(.top, 12)
         .padding(.bottom, 4)
     }
 
-    /// "1.2M views · 3 days ago · 21:55", dropping whichever parts the feed didn't supply.
+    /// "1.2M views · 3 days ago", dropping whichever parts the feed didn't supply. The running
+    /// time isn't here — it has its own badge on the thumbnail.
     private var stats: String {
         let age = item.publishedAt.flatMap { RelativeTime.string(for: $0) } ?? ""
-        return [item.viewCount, age, item.duration]
+        return [item.viewCount, age]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }
