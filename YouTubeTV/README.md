@@ -149,6 +149,30 @@ swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces
 everything else. Both run in CI (`.github/workflows/tvos-ci.yml`) with `--strict`,
 so any violation blocks the merge.
 
+## App icon
+
+The mark is a rune monogram for *Fjernsyn*: **ᚠ** (U+16A0, fehu/fé, "f") beside **ᛋ** (U+16CB,
+long-branch sól, "s"), in the red ochre that runestone carvings were painted with. Both are real
+runes for their own sound, set from the actual Unicode codepoints in Apple Symbols — the one
+runic-capable system font whose terminals are cut at an angle, which reads as chisel work.
+
+The artwork is generated rather than checked in as an opaque bitmap, so the design lives in one
+editable file:
+
+```sh
+Scripts/generate-app-icon.py
+```
+
+That rewrites `Sources/Resources/Assets.xcassets/App Icon & Top Shelf Image.brandassets`. The
+generated PNGs *are* committed, so a normal build needs neither the script nor the font. tvOS wants
+the icon as a layered image stack, which the system separates in 3D when the icon is focused; here
+the stone slab is the back layer, the chiselled groove the middle, and the red paint the front, so
+focusing the icon lifts the paint off the stone.
+
+Two things to know before reusing this elsewhere: it renders through a macOS system font, so the
+outlines are Apple's; and of the three S runes in the Runic block, only U+16CB is usable here —
+U+16CA points the wrong way and U+16CC is barely more than a tick.
+
 ## Structure
 
 - `Sources/Core` — InnerTube client, profile/token store, models, video-cell parsing (shared contracts)
