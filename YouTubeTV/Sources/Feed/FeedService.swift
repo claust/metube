@@ -37,6 +37,27 @@ struct FeedService {
         return result
     }
 
+    /// Loads a channel's page: its header details plus its shelves, parsed exactly like a feed's.
+    ///
+    /// A channel is just another `browseId`, so this is the same call the feeds make. Only the
+    /// header is new — the channel's name, avatar and, usefully, whether the account already
+    /// subscribes to it, which is the one authoritative answer to that question we can get for
+    /// a single channel.
+    func loadChannel(id: String, accessToken: String) async throws -> ChannelPage {
+        let json = try await InnerTubeClient.post(
+            endpoint: "browse",
+            client: .tv,
+            params: ["browseId": id],
+            bearer: accessToken
+        )
+        return ChannelPage(
+            title: channelTitle(in: json) ?? "",
+            avatarURL: channelAvatarURL(in: json),
+            isSubscribed: subscribedState(in: json),
+            feed: page(from: json, label: "channel \(id)")
+        )
+    }
+
     /// Loads a further page of shelves using a token from a previous `FeedPage`.
     func loadMore(continuation: String, accessToken: String) async throws -> FeedPage {
         let json = try await InnerTubeClient.post(
@@ -225,6 +246,44 @@ struct FeedService {
         }
         walk(json)
         return results
+    }
+
+    // MARK: - Channel header
+
+    /// The channel's name. `c4TabbedHeaderRenderer` is the long-standing shape;
+    /// `pageHeaderRenderer` is the view-model-era one some channels now answer with. Both are
+    /// searched for rather than pathed to, because which one arrives varies by channel.
+    private func channelTitle(in json: [String: Any]) -> String? {
+        for header in findAllRenderers(named: "c4TabbedHeaderRenderer", in: json) {
+            if let text = innerTubeText(header["title"]) ?? header["title"] as? String, !text.isEmpty {
+                return text
+            }
+        }
+        for header in findAllRenderers(named: "pageHeaderRenderer", in: json) {
+            if let text = header["pageTitle"] as? String, !text.isEmpty { return text }
+        }
+        return nil
+    }
+
+    private func channelAvatarURL(in json: [String: Any]) -> URL? {
+        for header in findAllRenderers(named: "c4TabbedHeaderRenderer", in: json) {
+            if let thumbs = header.value(at: "avatar/thumbnails") as? [[String: Any]],
+                let url = largestThumbnailURL(thumbs)
+            {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// Whether the account subscribes to this channel, per the header's own subscribe button.
+    /// `nil` when the response carried no such button — a channel page fetched without a usable
+    /// token, for instance — which the caller must not read as "not subscribed".
+    private func subscribedState(in json: [String: Any]) -> Bool? {
+        for button in findAllRenderers(named: "subscribeButtonRenderer", in: json) {
+            if let subscribed = button["subscribed"] as? Bool { return subscribed }
+        }
+        return nil
     }
 
     /// Shelf headings live under a few different renderers depending on the row type.

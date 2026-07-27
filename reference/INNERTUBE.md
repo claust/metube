@@ -158,6 +158,35 @@ Both verified working on TVHTML5 with the same Bearer token and the same shelf p
 
 Neither response names the feed it came from, so the caller has to supply that heading itself.
 
+## CHANNELS AND SUBSCRIPTIONS (TVHTML5 + Bearer token)
+
+**Not yet verified against a live account** — implemented from SmartTube's request shapes for
+the card-menu prototype. Confirm these before treating them as settled.
+
+A channel page is just another `browse`: `{"browseId":"UC…"}`, replying with the same
+`sectionListRenderer` → `shelfRenderer` shelves the feeds use, so it needs no separate parser.
+Its header adds three things the feeds don't have:
+
+```
+c4TabbedHeaderRenderer.title                        channel name (or pageHeaderRenderer.pageTitle)
+c4TabbedHeaderRenderer.avatar.thumbnails[*]         avatar (pick the largest, as with a tile)
+subscribeButtonRenderer.subscribed                  Bool — whether THIS account subscribes
+```
+
+`subscribed` is the only per-channel answer available; everything else has to come from the
+subscription list.
+
+- `FEchannels` — browse feed listing every channel the account subscribes to. The app reads the
+  ids straight off it (every `browseEndpoint.browseId` beginning with `UC`).
+- `subscription/subscribe` and `subscription/unsubscribe` — POST `{"channelIds":["UC…"]}`. The
+  reply carries only the button's new label and tracking params, so the status code is the
+  result.
+
+Channel ids on a video cell are not at a fixed path: a tile links its channel from a metadata
+line item, a lockup from the avatar's tap command, a `videoRenderer` from `longBylineText`. The
+robust read is the first `browseEndpoint.browseId` in the cell that starts with `UC` — playlist
+(`VL`/`PL`) and feed (`FE`) endpoints share the same field and are excluded by that prefix.
+
 ## SEARCH — `search` with `"query":"<text>"` (TVHTML5)
 
 Verified 2026-07-26. Works with or without the Bearer token; the app sends it so results are

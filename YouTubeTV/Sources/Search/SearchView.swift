@@ -6,8 +6,14 @@ import SwiftUI
 struct SearchView: View {
     /// Called when the user chooses a result. The orchestrator wires this to the player.
     var onSelectVideo: (VideoItem) -> Void
+    /// Called when a result's menu picks "Go to channel". The orchestrator wires this to
+    /// `ChannelView`.
+    var onOpenChannel: (VideoItem) -> Void
 
     @EnvironmentObject private var authStore: AuthStore
+
+    /// The result whose menu is open, and `nil` when none is.
+    @State private var menuItem: VideoItem?
 
     @State private var query = ""
     @State private var results: [VideoItem] = []
@@ -37,6 +43,7 @@ struct SearchView: View {
 
             content
         }
+        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel)
         .searchable(text: $query, prompt: "Search YouTube")
         // Re-runs whenever `query` changes, cancelling the in-flight run first — which is
         // what makes the sleep below a debounce rather than a fixed delay on every keystroke.
@@ -65,10 +72,14 @@ struct SearchView: View {
         ScrollView(.vertical) {
             LazyVGrid(columns: Self.columns, alignment: .leading, spacing: Metrics.cardSpacing) {
                 ForEach(results) { item in
-                    VideoCard(item: item) { onSelectVideo(item) }
-                        // The tvOS keyboard is made of buttons too, so a UI test needs a
-                        // way to count result cards specifically.
-                        .accessibilityIdentifier(Self.resultIdentifier)
+                    VideoCard(
+                        item: item,
+                        onLongPress: { menuItem = item },
+                        action: { onSelectVideo(item) }
+                    )
+                    // The tvOS keyboard is made of buttons too, so a UI test needs a
+                    // way to count result cards specifically.
+                    .accessibilityIdentifier(Self.resultIdentifier)
                 }
             }
             .padding(.horizontal, Metrics.horizontalInset)

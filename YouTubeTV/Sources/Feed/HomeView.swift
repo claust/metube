@@ -15,10 +15,18 @@ struct HomeView: View {
     /// Called when the user picks the plus in the profile bar. The orchestrator wires this to
     /// the sign-in screen.
     var onAddProfile: () -> Void
+    /// Called when a card's menu picks "Go to channel". The orchestrator wires this to
+    /// `ChannelView`.
+    var onOpenChannel: (VideoItem) -> Void
 
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
+    @EnvironmentObject private var subscriptions: SubscriptionStore
     @Environment(\.scenePhase) private var scenePhase
+
+    /// The card whose menu is open, and `nil` when none is. Held here rather than in the card
+    /// so one dialog serves every row.
+    @State private var menuItem: VideoItem?
 
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
@@ -72,16 +80,13 @@ struct HomeView: View {
     /// Start fetching the next page once a row this close to the end comes into view.
     private static let prefetchDistance = 2
 
-    /// Start fetching more videos for a row once a card this close to its end comes into view.
-    /// `FeedRow` below applies it, hence `fileprivate`.
-    fileprivate static let itemPrefetchDistance = 4
-
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             content
         }
+        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel)
         .task {
             // Load once on first appear.
             if sections.isEmpty && !isLoading {
@@ -159,7 +164,9 @@ struct HomeView: View {
                 } else {
                     ForEach(sections) { section in
                         FeedRow(
-                            section: section, onSelectVideo: onSelectVideo,
+                            section: section,
+                            onSelectVideo: onSelectVideo,
+                            onLongPressVideo: { menuItem = $0 },
                             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
                         )
                         .onAppear { prefetchIfNeeded(from: section) }
@@ -174,7 +181,9 @@ struct HomeView: View {
 
                     ForEach(extraSections) { section in
                         FeedRow(
-                            section: section, onSelectVideo: onSelectVideo,
+                            section: section,
+                            onSelectVideo: onSelectVideo,
+                            onLongPressVideo: { menuItem = $0 },
                             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
                         )
                     }
@@ -208,6 +217,11 @@ struct HomeView: View {
             return
         }
         guard await loadHomeFirstPage() else { return }
+
+        // Which channels the account follows, so the first card menu the user opens is labelled
+        // from the account rather than from the last launch's cache. Off the critical path —
+        // the cache already has an answer, and this only corrects it.
+        Task { await subscriptions.refresh(using: authStore) }
 
         // The spinner is already gone and Home's shelves are on screen, so a slow
         // Subscriptions or History request delays only its own rows. Home also just
@@ -348,6 +362,9 @@ struct HomeView: View {
         if let token = authStore.accessToken {
             Task { await loadSupplementaryFeeds(accessToken: token) }
         }
+        // As on first load: the account may have followed a channel elsewhere since, and this is
+        // the moment the feed catches up with it.
+        Task { await subscriptions.refresh(using: authStore) }
     }
 
     /// In a LazyVStack this runs as a row scrolls into view. Paging starts while there are
@@ -471,49 +488,4 @@ struct HomeView: View {
         }
     }
 
-}
-
-/// One shelf: a heading above a horizontally scrolling strip of cards.
-private struct FeedRow: View {
-    let section: FeedSection
-    var onSelectVideo: (VideoItem) -> Void
-    /// Fired as one of the last cards comes into view, so the row can grow before focus
-    /// reaches its end.
-    var onNeedMoreItems: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !section.title.isEmpty {
-                Text(section.title)
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Metrics.horizontalInset)
-            }
-
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: Metrics.cardSpacing) {
-                    ForEach(section.items) { item in
-                        VideoCard(item: item) { onSelectVideo(item) }
-                            // In a LazyHStack this runs as the card scrolls in, which is the
-                            // point: paging starts while cards are still to the right of it.
-                            // The tail is a slice, so this stays cheap however long the row gets.
-                            .onAppear {
-                                if section.items.suffix(HomeView.itemPrefetchDistance)
-                                    .contains(item)
-                                {
-                                    onNeedMoreItems()
-                                }
-                            }
-                    }
-                }
-                .padding(.horizontal, Metrics.horizontalInset)
-                // Room for the focused card to grow without colliding with the heading above.
-                .padding(.vertical, 32)
-            }
-            // Without this the focus scale/shadow is cut off at the scroll view's edges.
-            .scrollClipDisabled()
-        }
-        // Keeps left/right movement inside this row instead of jumping to a neighbouring one.
-        .focusSection()
-    }
 }
