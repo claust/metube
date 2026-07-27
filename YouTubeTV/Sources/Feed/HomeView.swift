@@ -24,12 +24,26 @@ struct HomeView: View {
     @State private var isLoadingMore = false
     @State private var pagesLoaded = 0
 
+    /// Rows currently fetching more videos, by section id. Guards against the same row firing
+    /// several requests while one is in flight — cards reappear constantly while scrolling.
+    @State private var rowsLoadingMore: Set<String> = []
+    /// Pages fetched per row, by section id. Absent means the row is still on its first page.
+    @State private var rowPagesLoaded: [String: Int] = [:]
+
     /// A backstop on runaway paging — home is effectively endless, and each page costs a
     /// request plus a screenful of thumbnails.
     private static let maxPages = 8
 
+    /// The same backstop for one row. A row page carries ~10 videos, so this caps a row at
+    /// roughly 100 — far more than anyone scrolls through, and still bounded.
+    private static let maxRowPages = 10
+
     /// Start fetching the next page once a row this close to the end comes into view.
     private static let prefetchDistance = 2
+
+    /// Start fetching more videos for a row once a card this close to its end comes into view.
+    /// `FeedRow` below applies it, hence `fileprivate`.
+    fileprivate static let itemPrefetchDistance = 4
 
     var body: some View {
         ZStack {
@@ -90,8 +104,11 @@ struct HomeView: View {
                         .padding(.top, 40)
                 } else {
                     ForEach(sections) { section in
-                        FeedRow(section: section, onSelectVideo: onSelectVideo)
-                            .onAppear { prefetchIfNeeded(from: section) }
+                        FeedRow(
+                            section: section, onSelectVideo: onSelectVideo,
+                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section) }
+                        )
+                        .onAppear { prefetchIfNeeded(from: section) }
                     }
 
                     // Sits between Home and the supplementary feeds, where the next page lands.
@@ -102,7 +119,10 @@ struct HomeView: View {
                     }
 
                     ForEach(extraSections) { section in
-                        FeedRow(section: section, onSelectVideo: onSelectVideo)
+                        FeedRow(
+                            section: section, onSelectVideo: onSelectVideo,
+                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section) }
+                        )
                     }
                 }
             }
@@ -235,6 +255,69 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - Paging one row (scrolling right)
+
+    /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
+    /// only a handful of videos, so without this a row ends after five cards.
+    private func prefetchItemsIfNeeded(in section: FeedSection) {
+        guard section.continuation != nil, !rowsLoadingMore.contains(section.id) else { return }
+        guard (rowPagesLoaded[section.id] ?? 1) < Self.maxRowPages else { return }
+        Task { await loadMoreItems(in: section.id) }
+    }
+
+    /// Appends the next batch of videos to one row.
+    @MainActor
+    private func loadMoreItems(in id: String) async {
+        // Re-read the row: the caller's copy is a snapshot, and its token is stale once an
+        // earlier page has landed.
+        guard let section = self.section(withID: id), let token = section.continuation,
+            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
+        else { return }
+
+        rowsLoadingMore.insert(id)
+        defer { rowsLoadingMore.remove(id) }
+
+        do {
+            guard
+                let page = try await authStore.authorized({
+                    try await FeedService().loadMoreItems(continuation: token, accessToken: $0)
+                })
+            else { return }
+
+            rowPagesLoaded[id, default: 1] += 1
+            append(page.items, continuation: page.continuation, to: id)
+        } catch {
+            if isCancellation(error) { return }
+            // Keep what's already in the row and stop paging it; the rest of the feed is fine.
+            append([], continuation: nil, to: id)
+        }
+    }
+
+    private func section(withID id: String) -> FeedSection? {
+        sections.first { $0.id == id } ?? extraSections.first { $0.id == id }
+    }
+
+    /// Adds videos to the row with this id, in whichever list holds it.
+    @MainActor
+    private func append(_ items: [VideoItem], continuation: String?, to id: String) {
+        func update(_ list: inout [FeedSection]) -> Bool {
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
+            let existing = Set(list[index].items.map(\.id))
+            let fresh = items.filter { !existing.contains($0.id) }
+            list[index] = FeedSection(
+                id: id,
+                title: list[index].title,
+                items: list[index].items + fresh,
+                // A page that adds nothing new means the row is going in circles: stop, or the
+                // last card stays the trigger and refires on every scroll.
+                continuation: fresh.isEmpty ? nil : continuation
+            )
+            return true
+        }
+        if update(&sections) { return }
+        _ = update(&extraSections)
+    }
+
     /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.
     private func newSections(in candidates: [FeedSection]) -> [FeedSection] {
         let shown = Set(sections.flatMap { $0.items.map(\.id) })
@@ -249,6 +332,9 @@ struct HomeView: View {
 private struct FeedRow: View {
     let section: FeedSection
     var onSelectVideo: (VideoItem) -> Void
+    /// Fired as one of the last cards comes into view, so the row can grow before focus
+    /// reaches its end.
+    var onNeedMoreItems: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -261,8 +347,15 @@ private struct FeedRow: View {
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: Metrics.cardSpacing) {
-                    ForEach(section.items) { item in
+                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
                         VideoCard(item: item) { onSelectVideo(item) }
+                            // In a LazyHStack this runs as the card scrolls in, which is the
+                            // point: paging starts while cards are still to the right of it.
+                            .onAppear {
+                                if index >= section.items.count - HomeView.itemPrefetchDistance {
+                                    onNeedMoreItems()
+                                }
+                            }
                     }
                 }
                 .padding(.horizontal, Metrics.horizontalInset)
