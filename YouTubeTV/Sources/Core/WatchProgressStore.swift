@@ -40,6 +40,16 @@ final class WatchProgressStore: ObservableObject {
     /// The write in flight, so the next one can queue behind it (see `persist`).
     private var persistTask: Task<Void, Never>?
 
+    /// Bumped whenever the stored history is rearranged behind the writer's back — a profile
+    /// switch, the legacy migration, a move, a deletion. A persist queued before the bump holds
+    /// a snapshot of a history that no longer belongs at that key, so it is dropped instead of
+    /// written: without this, signing a profile out could be undone moments later by a write
+    /// that was already on its way to disk.
+    ///
+    /// A counter rather than a per-profile "deleted" flag, because there is nothing to clear:
+    /// a profile signed out and back in simply persists at the newer generation.
+    private var generation = 0
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
@@ -50,16 +60,17 @@ final class WatchProgressStore: ObservableObject {
     /// the last profile signs out, so the feed can't keep drawing the departed user's progress.
     func activate(profileID: String?) {
         guard profileID != self.profileID else { return }
+        generation += 1
         self.profileID = profileID
-        entries = profileID.map { Self.load(profileID: $0, defaults: defaults) } ?? [:]
+        entries = profileID.map { load(profileID: $0) } ?? [:]
     }
 
-    /// Key under which one profile's history is stored. Kept in one place because the migration
-    /// and deletion helpers, which run without an instance, have to agree with `persist`.
+    /// Key under which one profile's history is stored, kept in one place so the migration and
+    /// deletion helpers agree with `persist`.
     private static func storageKey(profileID: String) -> String { "yt.watchProgress.\(profileID)" }
 
-    private static func load(profileID: String, defaults: UserDefaults) -> [String: Entry] {
-        guard let data = defaults.data(forKey: storageKey(profileID: profileID)),
+    private func load(profileID: String) -> [String: Entry] {
+        guard let data = defaults.data(forKey: Self.storageKey(profileID: profileID)),
             let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
         else { return [:] }
         return decoded
@@ -68,26 +79,29 @@ final class WatchProgressStore: ObservableObject {
     /// Hands the pre-profiles build's single, un-namespaced history to the profile its login
     /// became. Does nothing once that profile has a history of its own, so a rerun can't
     /// resurrect stale entries over newer ones.
-    static func adoptLegacyEntries(profileID: String, defaults: UserDefaults = .standard) {
+    func adoptLegacyEntries(for profileID: String) {
         let legacyKey = "yt.watchProgress"
         guard let data = defaults.data(forKey: legacyKey) else { return }
-        if defaults.data(forKey: storageKey(profileID: profileID)) == nil {
-            defaults.set(data, forKey: storageKey(profileID: profileID))
+        if defaults.data(forKey: Self.storageKey(profileID: profileID)) == nil {
+            defaults.set(data, forKey: Self.storageKey(profileID: profileID))
         }
         defaults.removeObject(forKey: legacyKey)
+        generation += 1
     }
 
     /// Carries a profile's history over when it changes id — which happens once, to the login
     /// migrated from the single-account build, as soon as we learn which account it is.
-    static func moveEntries(from oldID: String, to newID: String, defaults: UserDefaults = .standard) {
-        guard let data = defaults.data(forKey: storageKey(profileID: oldID)) else { return }
-        defaults.set(data, forKey: storageKey(profileID: newID))
-        defaults.removeObject(forKey: storageKey(profileID: oldID))
+    func moveEntries(from oldID: String, to newID: String) {
+        guard let data = defaults.data(forKey: Self.storageKey(profileID: oldID)) else { return }
+        defaults.set(data, forKey: Self.storageKey(profileID: newID))
+        defaults.removeObject(forKey: Self.storageKey(profileID: oldID))
+        generation += 1
     }
 
     /// Erases a profile's history — used when the user signs that profile out for good.
-    static func discardEntries(profileID: String, defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: storageKey(profileID: profileID))
+    func discardEntries(for profileID: String) {
+        defaults.removeObject(forKey: Self.storageKey(profileID: profileID))
+        generation += 1
     }
 
     // MARK: - Reading
@@ -154,9 +168,13 @@ final class WatchProgressStore: ObservableObject {
         let snapshot = entries
         let defaults = defaults
         let key = Self.storageKey(profileID: profileID)
+        let generation = generation
         let previous = persistTask
-        persistTask = Task.detached(priority: .utility) {
+        persistTask = Task.detached(priority: .utility) { [weak self] in
             await previous?.value
+            // Checked here rather than at the top: this task can sit behind others for as long
+            // as they take, and the sign-out it must not undo can land at any point in between.
+            guard let self, await self.generation == generation else { return }
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             defaults.set(data, forKey: key)
         }

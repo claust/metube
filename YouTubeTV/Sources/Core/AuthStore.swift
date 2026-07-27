@@ -21,13 +21,18 @@ final class AuthStore: ObservableObject {
     private var refreshTokens: [String: String] = [:]
 
     private let defaults: UserDefaults
+    /// Told when a profile's history is migrated, moved or deleted. Held rather than reached
+    /// through statics so those changes go through the same object the app is showing, which is
+    /// what lets it drop writes that a deletion has overtaken.
+    private let watchProgress: WatchProgressStore
     private let profilesKey = "yt.profiles"
     private let activeProfileKey = "yt.activeProfile"
 
     var isLoggedIn: Bool { accessToken != nil }
     var activeProfile: Profile? { profiles.first { $0.id == activeProfileID } }
 
-    init(defaults: UserDefaults = .standard) {
+    init(watchProgress: WatchProgressStore, defaults: UserDefaults = .standard) {
+        self.watchProgress = watchProgress
         self.defaults = defaults
 
         profiles = Self.decodeProfiles(defaults.data(forKey: profilesKey))
@@ -81,7 +86,7 @@ final class AuthStore: ObservableObject {
     /// Its watch progress goes too: signing a profile out of a shared TV should leave nothing of
     /// it behind.
     func signOut(_ profileID: String) {
-        WatchProgressStore.discardEntries(profileID: profileID, defaults: defaults)
+        watchProgress.discardEntries(for: profileID)
         invalidate(profileID)
     }
 
@@ -209,7 +214,7 @@ final class AuthStore: ObservableObject {
         }
         accessTokens[newID] = accessTokens.removeValue(forKey: profile.id)
         refreshTokens[newID] = refreshTokens.removeValue(forKey: profile.id)
-        WatchProgressStore.moveEntries(from: profile.id, to: newID, defaults: defaults)
+        watchProgress.moveEntries(from: profile.id, to: newID)
 
         profiles.removeAll { $0.id == profile.id }
         return newID
@@ -254,7 +259,7 @@ final class AuthStore: ObservableObject {
         }
         KeychainStore.delete(legacyAccessKey)
         KeychainStore.delete(legacyRefreshKey)
-        WatchProgressStore.adoptLegacyEntries(profileID: profile.id, defaults: defaults)
+        watchProgress.adoptLegacyEntries(for: profile.id)
 
         profiles = [profile]
         return true
