@@ -31,6 +31,16 @@ xcrun simctl launch booted dk.delectosoft.metube
 
 Sign in by visiting the shown URL on your phone/computer and entering the code (or scan the QR).
 
+## Profiles
+
+Several YouTube accounts can be signed in at once. The Home header shows one avatar per account
+— the active one ringed — plus a plus button that runs the sign-in flow again for another
+account. Pressing an avatar offers *Use this profile* and *Sign out*.
+
+Each profile keeps its own OAuth tokens (Keychain) and its own watch progress, so the feed,
+history and resume positions are whatever that account sees. Signing a profile out deletes its
+watch progress along with its credentials.
+
 ## Run on a real Apple TV
 
 One-time setup:
@@ -116,8 +126,8 @@ so any violation blocks the merge.
 
 ## Structure
 
-- `Sources/Core` — InnerTube client, OAuth token store, models, video-cell parsing (shared contracts)
-- `Sources/Auth` — OAuth device-activation flow + `LoginView`
+- `Sources/Core` — InnerTube client, profile/token store, models, video-cell parsing (shared contracts)
+- `Sources/Auth` — OAuth device-activation flow, account lookup + `LoginView`
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
 - `Sources/Search` — TV `search` + `SearchView` (reached from the icon in the Home header)
 - `Sources/UI` — the video card and layout metrics both screens share

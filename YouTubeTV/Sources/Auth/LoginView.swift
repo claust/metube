@@ -8,7 +8,15 @@ import CoreImage.CIFilterBuiltins
 /// On appear it requests a user code, shows the activation instructions + code + a
 /// scannable QR code, and simultaneously polls for the token. On success it hands the
 /// tokens to `AuthStore`; `RootView` observes `isLoggedIn` and swaps to the feed.
+///
+/// The same screen adds a further profile to an already signed-in TV. In that case it is
+/// presented over the feed and `onDismiss` takes it away again — on success as well as when the
+/// user backs out, since the feed behind it is still perfectly usable.
 struct LoginView: View {
+    /// Set only when this screen is presented over the feed. `nil` for the first sign-in, where
+    /// there is nothing to go back to.
+    var onDismiss: (() -> Void)?
+
     @EnvironmentObject private var authStore: AuthStore
 
     /// UI phases for the flow.
@@ -39,6 +47,19 @@ struct LoginView: View {
         .foregroundStyle(.white)
         .onAppear { startFlow() }
         .onDisappear { flowTask?.cancel() }
+        // The Menu button is how a tvOS user backs out of anything; without this it does
+        // nothing at all on a cover, leaving the only way out a completed sign-in.
+        .onExitCommand(perform: onDismiss)
+    }
+
+    /// Escape hatch while adding a profile. Absent on the first sign-in, where cancelling
+    /// would leave an empty screen.
+    @ViewBuilder
+    private var cancelButton: some View {
+        if let onDismiss {
+            Button("Cancel", action: onDismiss)
+                .font(.system(size: 30, weight: .semibold))
+        }
     }
 
     // MARK: - Phase views
@@ -86,6 +107,8 @@ struct LoginView: View {
                         .font(.system(size: 30))
                         .foregroundStyle(.secondary)
                 }
+
+                cancelButton
             }
 
             // Right: scannable QR code (nice-to-have).
@@ -118,12 +141,16 @@ struct LoginView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 900)
-            Button(action: startFlow) {
-                Text("Try again")
-                    .font(.system(size: 34, weight: .semibold))
-                    .padding(.horizontal, 20)
+            HStack(spacing: 32) {
+                Button(action: startFlow) {
+                    Text("Try again")
+                        .font(.system(size: 34, weight: .semibold))
+                        .padding(.horizontal, 20)
+                }
+                .focusable()
+
+                cancelButton
             }
-            .focusable()
         }
         .padding(80)
     }
@@ -147,10 +174,11 @@ struct LoginView: View {
                 )
                 if Task.isCancelled { return }
 
-                // AuthStore is @MainActor; hop back to update login state.
-                await MainActor.run {
-                    authStore.setTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
-                }
+                // Adds the profile the tokens belong to and switches to it. This also fetches
+                // the account's name and avatar, so the wait stays on this screen rather than
+                // landing on a feed above an unlabelled avatar.
+                await authStore.signIn(tokens: tokens)
+                onDismiss?()
             } catch {
                 // View disappeared or flow restarted — nothing to show.
                 if isCancellation(error) { return }

@@ -70,6 +70,36 @@ yt-dlp use). They are NOT stored in this repo — put them in `YouTubeTV/Config/
 
 Authenticated InnerTube calls add header: `Authorization: Bearer {access_token}`.
 
+Each profile in the app is its own run of this flow, with its own `access_token`/`refresh_token`
+pair. There is no InnerTube-side account switching involved: switching profiles just swaps which
+Bearer token the feed requests carry.
+
+## WHO AM I — `account/accounts_list` (TVHTML5 + Bearer token)
+
+Verified 2026-07-27. Takes no parameters and describes whoever the token belongs to — the only
+call that puts a name and a face on a set of credentials. A device-flow token is bound to a
+single account, so the list is one entry, but read `isSelected` rather than assuming that.
+
+```
+contents[*].accountSectionListRenderer
+  .contents[*].accountItemSectionRenderer
+    .contents[*].accountItem
+      .accountName        {"simpleText": "..."}   display name
+      .channelHandle      {"simpleText": "@..."}
+      .accountByline      {"simpleText": "..."}   the account's email
+      .accountPhoto.thumbnails[*]                 avatar, up to 216x216
+      .isSelected                                 which account the token is for
+      .serviceEndpoint.selectActiveIdentityEndpoint.supportedTokens[*]
+        .accountStateToken.obfuscatedGaiaId       Google's stable id for the account
+```
+
+`obfuscatedGaiaId` is what the app keys a profile on: it survives a rename of both the account
+and its channel, so signing the same account back in lands on its existing watch history.
+
+Note `account/account_menu` — the endpoint the *web* client uses for this — answers **HTTP 400**
+on TVHTML5, with or without a token (it answers 401 unauthenticated, so the endpoint exists and
+the client is what it rejects). Don't reach for it.
+
 ## HOME feed — `browse` with `"browseId":"default"` (TVHTML5 client + Bearer token)
 
 Response path to video cells (the signed-in response nests shelves/tiles under this same path):
