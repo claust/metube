@@ -26,7 +26,9 @@ struct FeedService {
 
         if feed != .home, let first = result.sections.first {
             var sections = result.sections
-            sections[0] = FeedSection(id: first.id, title: feed.title, items: first.items)
+            sections[0] = FeedSection(
+                id: first.id, title: feed.title, items: first.items,
+                continuation: first.continuation)
             result = FeedPage(sections: sections, continuation: result.continuation)
         }
 
@@ -42,6 +44,29 @@ struct FeedService {
             bearer: accessToken
         )
         return page(from: json, label: "continuation")
+    }
+
+    /// Loads more videos for one row, using the token from that `FeedSection`.
+    ///
+    /// The TV feed hands each shelf only its first few videos (3–6, verified 2026-07-27) and a
+    /// token for the rest, so without this every row is a near-empty stub. Same `browse` call as
+    /// shelf paging — only the token differs — but the reply is a bare list of videos rather
+    /// than a section list.
+    func loadMoreItems(continuation: String, accessToken: String) async throws -> FeedRowPage {
+        let json = try await InnerTubeClient.post(
+            endpoint: "browse",
+            client: .tv,
+            params: ["continuation": continuation],
+            bearer: accessToken
+        )
+        let items = VideoItemParser.items(in: json)
+        let token = rowContinuation(in: json)
+
+        #if DEBUG
+        print("[FeedService] row continuation: \(items.count) items | more: \(token != nil)")
+        #endif
+
+        return FeedRowPage(items: items, continuation: token)
     }
 
     /// Both the initial and continuation responses nest shelves the same way, so they share
@@ -63,7 +88,10 @@ struct FeedService {
         #if DEBUG
         print(
             "[FeedService] \(label): \(sections.count) shelves: "
-                + sections.map { "\($0.title.isEmpty ? "(untitled)" : $0.title)=\($0.items.count)" }
+                + sections.map {
+                    "\($0.title.isEmpty ? "(untitled)" : $0.title)=\($0.items.count)"
+                        + ($0.continuation != nil ? "+" : "")
+                }
                 .joined(separator: ", ") + " | more: \(token != nil)")
         #endif
 
@@ -81,7 +109,29 @@ struct FeedService {
     /// tree, which would otherwise return a single row's token and paginate the wrong axis.
     private func sectionListContinuation(in json: [String: Any]) -> String? {
         // `sectionListRenderer` on the first page; `sectionListContinuation` on later ones.
-        for containerName in ["sectionListRenderer", "sectionListContinuation"] {
+        continuation(in: json, containers: ["sectionListRenderer", "sectionListContinuation"])
+    }
+
+    /// The token that fetches more videos for one row, read off the row's own list container.
+    ///
+    /// `horizontalListRenderer` is the shape inside a shelf on any first page;
+    /// `horizontalListContinuation` is what a row continuation replies with. Grid variants are
+    /// included because some browse responses lay a row out as a grid instead.
+    private func rowContinuation(in json: [String: Any]) -> String? {
+        continuation(
+            in: json,
+            containers: [
+                "horizontalListRenderer", "horizontalListContinuation",
+                "gridRenderer", "gridContinuation",
+            ])
+    }
+
+    /// First `continuations[]` token found on any of the named containers.
+    ///
+    /// Reading off a named container rather than searching the whole tree matters: a response
+    /// carries tokens for both axes, so a blind search would happily paginate the wrong one.
+    private func continuation(in json: [String: Any], containers: [String]) -> String? {
+        for containerName in containers {
             for container in findAllRenderers(named: containerName, in: json) {
                 guard let continuations = container["continuations"] as? [[String: Any]] else { continue }
                 for entry in continuations {
@@ -117,7 +167,10 @@ struct FeedService {
             if items.allSatisfy({ emitted.contains($0.id) }) { continue }
             emitted.formUnion(items.map(\.id))
 
-            sections.append(FeedSection(title: shelfTitle(shelf) ?? "", items: items))
+            sections.append(
+                FeedSection(
+                    title: shelfTitle(shelf) ?? "", items: items,
+                    continuation: rowContinuation(in: shelf)))
         }
 
         return sections

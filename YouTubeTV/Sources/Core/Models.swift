@@ -39,12 +39,26 @@ struct FeedSection: Identifiable, Hashable {
     /// The shelf heading. Empty when YouTube gave the shelf no title.
     let title: String
     let items: [VideoItem]
+    /// Token that fetches more videos for *this row* (scrolling right). Separate from
+    /// `FeedPage.continuation`, which fetches more rows. `nil` once the row is exhausted.
+    let continuation: String?
 
-    init(id: String = UUID().uuidString, title: String, items: [VideoItem]) {
+    init(
+        id: String = UUID().uuidString, title: String, items: [VideoItem],
+        continuation: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.items = items
+        self.continuation = continuation
     }
+}
+
+/// One page of a single row: the videos it added plus the token for the page after it.
+struct FeedRowPage {
+    let items: [VideoItem]
+    /// `nil` when the row has no more videos.
+    let continuation: String?
 }
 
 /// A browsable YouTube feed, identified by its InnerTube `browseId`.
