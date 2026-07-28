@@ -28,6 +28,23 @@ flow, shows your personalized Home recommendations, and plays videos natively wi
    open YouTubeTV.xcodeproj    # or build from the command line
    ```
 
+## Make targets
+
+`Makefile` (in this directory, which is where every command below has to run from) wraps the
+xcodebuild invocations the rest of this README spells out. `make` on its own lists them:
+
+```sh
+make run        # build, install and launch on the Apple TV simulator
+make deploy     # the same on a paired Apple TV — device auto-detected
+make check      # SwiftLint + swift-format lint, exactly what CI gates on
+make format     # reformat in place
+make build      # compile for the simulator only (no signing, no device)
+make test       # the UI tests
+```
+
+Both simulator and device are overridable — `make run TV_SIMULATOR="Apple TV B"`,
+`make deploy TV_DEVICE=<name-or-udid>`. The long-hand equivalents follow below.
+
 ## Run on the Apple TV simulator (CLI)
 
 ```sh
