@@ -56,6 +56,10 @@ struct VideoCard: View {
     private static let titleSize: CGFloat = 30
     private static let titleFont: Font = .system(size: titleSize, weight: .semibold)
 
+    /// How far the caption's text sits in from the card's edges. Applied to its lines one by one
+    /// rather than to the caption as a whole, so the title can scroll the full width — see `title`.
+    private static let captionInset: CGFloat = 14
+
     /// The title box is always two lines tall, whether it holds a wrapped title or the focused
     /// card's single scrolling line, so taking focus doesn't resize the caption under the
     /// thumbnail. Measured from the font rather than guessed, so it still fits if the size changes.
@@ -297,8 +301,11 @@ struct VideoCard: View {
                     .font(Self.subtitleFont)
                     .foregroundStyle(isFocused ? Color.black.opacity(0.6) : Color.white.opacity(0.6))
                     .lineLimit(1)
+                    .padding(.horizontal, Self.captionInset)
             }
 
+            // Inset from within, so the line it scrolls along is the whole width of the card —
+            // see `title`. The channel and stats lines around it are inset here instead.
             title
 
             if !stats.isEmpty {
@@ -306,13 +313,20 @@ struct VideoCard: View {
                     .font(Self.subtitleFont)
                     .foregroundStyle(isFocused ? Color.black.opacity(0.6) : Color.white.opacity(0.6))
                     .lineLimit(1)
+                    .padding(.horizontal, Self.captionInset)
             }
         }
-        // The title box already keeps its two lines; this holds the rest of the caption open too,
-        // so a card missing a channel or stats line doesn't sit shorter than its neighbours and
-        // leave the row's focus panels ragged.
-        .frame(maxWidth: .infinity, minHeight: 122, alignment: .topLeading)
-        .padding(.horizontal, 14)
+        // A stated width, rather than `maxWidth: .infinity`, which reports whatever the text under
+        // it asks for when the width it is offered is unspecified — and the focused card's title
+        // asks for its full unwrapped width (700pt and up). That measurement became the card's
+        // width, so the card overflowed its own frame, sat off-centre inside it, and had the
+        // right-hand side of the thumbnail — the preview playing in it — clipped away.
+        //
+        // The title box already keeps its two lines; the minimum height holds the rest of the
+        // caption open too, so a card missing a channel or stats line doesn't sit shorter than its
+        // neighbours and leave the row's focus panels ragged.
+        .frame(width: Metrics.cardWidth, alignment: .topLeading)
+        .frame(minHeight: 122, alignment: .topLeading)
         .padding(.top, 12)
         .padding(.bottom, 4)
     }
@@ -321,18 +335,25 @@ struct VideoCard: View {
     /// long title can be read in full instead of ending in an ellipsis; every other card keeps
     /// the quiet two-line wrap. Either way the box is `titleHeight` tall, so the swap doesn't
     /// move the stats line or change the card's height.
+    ///
+    /// The scrolling line runs the full width of the card, unlike the two lines bracketing it:
+    /// it starts level with them, `captionInset` in, but slides right out to the card's edges
+    /// rather than stopping short of them, so a long title has the whole tile to move through.
     @ViewBuilder
     private var title: some View {
         Group {
             if isFocused {
-                ScrollingTitle(text: item.title, font: Self.titleFont)
-                    .foregroundStyle(.black)
+                ScrollingTitle(
+                    text: item.title, font: Self.titleFont, leadingInset: Self.captionInset
+                )
+                .foregroundStyle(.black)
             } else {
                 Text(item.title)
                     .font(Self.titleFont)
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                    .padding(.horizontal, Self.captionInset)
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -368,13 +389,19 @@ struct VideoCard: View {
 private struct ScrollingTitle: View {
     let text: String
     let font: Font
+    /// Where the text sits when it is standing still, measured from the left-hand edge of the
+    /// box. Taken here rather than as padding around the whole view so that only the *text* is
+    /// inset: the line it travels along still reaches both edges, and a title scrolling past
+    /// runs off the card rather than stopping short of it.
+    var leadingInset: CGFloat = 0
 
     /// Blank run between the end of the text and the start of the repeat, so the two copies
     /// read as one title coming round again rather than as a doubled word.
     private static let gap: CGFloat = 90
 
-    /// Points per second. Slow enough to read at across-the-room distance.
-    private static let speed: CGFloat = 60
+    /// Points per second. Quick enough that a long title comes round again while the card still
+    /// has focus, and still readable at across-the-room distance.
+    private static let speed: CGFloat = 95
 
     /// The title holds still this long before it starts moving, so the opening words can be read
     /// at the moment the card takes focus rather than sliding out from under the eye.
@@ -391,29 +418,39 @@ private struct ScrollingTitle: View {
     private var shift: CGFloat { textWidth + Self.gap }
 
     var body: some View {
-        HStack(spacing: Self.gap) {
-            line
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
-                            textWidth = width
+        // The line the title has to fit in has to be measured from the box, not from what's in
+        // it: a flexible frame around an oversized child reports the child's width, so measuring
+        // the text's own container asked the title how wide it was and got the same number back
+        // both times. `overflows` was then false however long the title, and it never scrolled.
+        // A `GeometryReader` reports the width it is offered whatever it holds, which is the
+        // question being asked.
+        GeometryReader { proxy in
+            HStack(spacing: Self.gap) {
+                line
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
+                                textWidth = width
+                            }
                         }
                     }
-                }
 
-            // Only drawn when it can actually be reached, so a short title isn't quietly
-            // rendered twice off the right-hand edge.
-            // Hidden from accessibility: it's the same title over again, and the card's label
-            // (which UI tests use as the card's identity) shouldn't say it twice.
-            if overflows { line.accessibilityHidden(true) }
-        }
-        .offset(x: offset)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
-                    containerWidth = width
-                }
+                // Only drawn when it can actually be reached, so a short title isn't quietly
+                // rendered twice off the right-hand edge.
+                // Hidden from accessibility: it's the same title over again, and the card's label
+                // (which UI tests use as the card's identity) shouldn't say it twice.
+                if overflows { line.accessibilityHidden(true) }
+            }
+            // The inset moves the text, not the box: the offset the animation drives carries the
+            // title straight past it and off the card's edge.
+            .offset(x: leadingInset + offset)
+            // Top-leading, so the single scrolling line sits where the first of the two wrapped
+            // lines does on every other card and focus doesn't nudge the title down.
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            // What's left for the text once it is inset — a title that fits *that* stands still,
+            // level with the channel and stats lines, rather than scrolling to no purpose.
+            .onChange(of: proxy.size.width, initial: true) { _, width in
+                containerWidth = width - leadingInset
             }
         }
         .clipped()
