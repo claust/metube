@@ -96,8 +96,7 @@ struct VideoCard: View {
                 RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                     .fill(isFocused ? Color(white: 0.86) : Color.clear)
             )
-            .clipShape(
-                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
             // A Short's artwork covers that panel completely, so focus needs something the image
             // can't swallow. Drawn after the clip so the whole ring stays on the tile.
             .overlay { if item.isShort { focusRing } }

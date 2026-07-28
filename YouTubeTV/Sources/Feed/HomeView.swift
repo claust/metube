@@ -499,8 +499,8 @@ struct HomeView: View {
     /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
     /// which is neither the shape nor the metadata a Short has.
     private func updateTopShelf(from sections: [FeedSection]) {
-        let videos = sections.filter { !$0.isShorts }
-            .flatMap(\.items).prefix(TopShelfStore.itemCount).map {
+        let candidates = sections.filter { !$0.isShorts }.flatMap(\.items)
+        let videos = candidates.prefix(TopShelfStore.itemCount).map {
             TopShelfVideo(
                 id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
         }
