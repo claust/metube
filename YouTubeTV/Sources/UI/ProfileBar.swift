@@ -2,9 +2,10 @@ import SwiftUI
 
 /// The signed-in accounts, as a row of avatars in the Home header, plus a button to add one.
 ///
-/// Pressing an avatar opens a short menu rather than switching straight away: an avatar is a
-/// small target on a screen driven by a d-pad, and "switch account" and "sign out" are both
-/// things you'd rather confirm than trigger by overshooting.
+/// Pressing another account's avatar switches to it there and then: it is the only thing that
+/// press could mean, and a menu to pick the single option out of is a press wasted. The active
+/// account's avatar has nothing left to switch to, so its press opens the sign-out — the one
+/// action worth confirming.
 struct ProfileBar: View {
     /// Called when the user picks the plus button. The orchestrator wires this to the sign-in
     /// screen — `ProfileBar` has no way to present one from inside the header.
@@ -12,16 +13,32 @@ struct ProfileBar: View {
 
     @EnvironmentObject private var authStore: AuthStore
 
-    /// The profile whose menu is open, and `nil` when none is.
+    /// The profile whose sign-out is open, and `nil` when none is.
     @State private var menuProfile: Profile?
+
+    /// The active account first, so the account the feed belongs to is always the one the row
+    /// reads from, and the rest in the order they were added.
+    private var orderedProfiles: [Profile] {
+        // Partitioned rather than sorted: `sorted(by:)` makes no stability promise, and the
+        // others' order is the order they were added in, which shouldn't shuffle on a switch.
+        let active = authStore.profiles.filter { $0.id == authStore.activeProfileID }
+        return active + authStore.profiles.filter { $0.id != authStore.activeProfileID }
+    }
 
     var body: some View {
         HStack(spacing: 16) {
-            ForEach(authStore.profiles) { profile in
+            ForEach(orderedProfiles) { profile in
+                let isActive = profile.id == authStore.activeProfileID
                 ProfileAvatarButton(
                     profile: profile,
-                    isActive: profile.id == authStore.activeProfileID,
-                    action: { menuProfile = profile }
+                    isActive: isActive,
+                    action: {
+                        if isActive {
+                            menuProfile = profile
+                        } else {
+                            authStore.activate(profile.id)
+                        }
+                    }
                 )
             }
 
@@ -38,11 +55,6 @@ struct ProfileBar: View {
             titleVisibility: .visible,
             presenting: menuProfile
         ) { profile in
-            // Switching to the profile you are already on isn't an action, so the active
-            // profile's menu is just the sign-out.
-            if profile.id != authStore.activeProfileID {
-                Button("Use this profile") { authStore.activate(profile.id) }
-            }
             Button("Sign out", role: .destructive) { authStore.signOut(profile.id) }
         }
     }
