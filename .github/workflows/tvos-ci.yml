@@ -90,7 +90,7 @@ jobs:
       # in CI so unformatted code can't merge. Config lives in .swift-format.
       # --strict fails the job on any formatting drift.
       - name: swift-format lint
-        run: xcrun swift-format lint --strict --recursive Sources UITests
+        run: xcrun swift-format lint --strict --recursive Sources UITests TopShelf
 
       # A generic simulator destination compiles for appletvsimulator without
       # needing a bootable device, so CI never depends on which concrete Apple

@@ -20,6 +20,12 @@ targets:
         - YouTubeTVUITests
     sources:
       - path: Sources
+    dependencies:
+      # Embeds the Top Shelf extension in the app bundle; without this the extension
+      # builds but tvOS never sees it, and a focused icon shows no tiles.
+      - target: TopShelf
+      # `TVTopShelfContentProvider.topShelfContentDidChange()`, called when the feed reloads.
+      - sdk: TVServices.framework
     configFiles:
       Debug: Config/Secrets.xcconfig
       Release: Config/Secrets.xcconfig
@@ -30,17 +36,73 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # How a Top Shelf tile reaches the app — see `TopShelfLink`, which is the only
+        # place this scheme is built or parsed.
+        CFBundleURLTypes:
+          - CFBundleURLName: dk.delectosoft.metube
+            CFBundleURLSchemes: [metube]
         YTInnerTubeAPIKey: $(YT_INNERTUBE_API_KEY)
         YTOAuthClientID: $(YT_OAUTH_CLIENT_ID)
         YTOAuthClientSecret: $(YT_OAUTH_CLIENT_SECRET)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dk.delectosoft.metube
+        # The app group the app writes the Top Shelf snapshot into and the extension reads
+        # back. Both targets point at the same file — they need the identical group, or the
+        # two would see different (empty) stores.
+        #
+        # Split by SDK because App Groups is a paid-Developer-Program capability. The
+        # simulator enforces no provisioning, so it always gets the entitlement and the Top
+        # Shelf works there unconditionally. A device build only gets it if
+        # `YT_DEVICE_ENTITLEMENTS` names the file in Config/Secrets.xcconfig; left empty (the
+        # default) the app still builds, installs and runs on an Apple TV under a free
+        # account — `TopShelfStore` no-ops without the group — it just shows no tiles.
+        CODE_SIGN_ENTITLEMENTS[sdk=appletvsimulator*]: Config/AppGroup.entitlements
+        CODE_SIGN_ENTITLEMENTS[sdk=appletvos*]: $(YT_DEVICE_ENTITLEMENTS)
         INFOPLIST_KEY_CFBundleDisplayName: YouTube TV
         # Device builds use automatic signing; DEVELOPMENT_TEAM comes from
         # Config/Secrets.xcconfig (gitignored) so each developer supplies their own.
         # Simulator builds ignore both.
         CODE_SIGN_STYLE: Automatic
+
+  # The tiles tvOS draws above the app icon when it is focused on the home screen's top row.
+  # A separate process with no credentials of its own: it only decodes the snapshot the app
+  # leaves in the shared app group, which is why `Sources/Core/TopShelf.swift` — and nothing
+  # else from `Sources` — is compiled into it as well.
+  TopShelf:
+    type: app-extension
+    platform: tvOS
+    sources:
+      - path: TopShelf
+      - path: Sources/Core/TopShelf.swift
+    dependencies:
+      - sdk: TVServices.framework
+    # Same xcconfig as the app, for `DEVELOPMENT_TEAM` alone: an embedded extension is signed
+    # as its own bundle, so without this a device build fails on the extension with "requires
+    # a development team" even though the app itself signs fine. The YouTube credentials in
+    # there go unused here — nothing in the extension talks to the network.
+    configFiles:
+      Debug: Config/Secrets.xcconfig
+      Release: Config/Secrets.xcconfig
+    info:
+      path: TopShelf/Info.plist
+      properties:
+        CFBundleDisplayName: YouTube TV Top Shelf
+        # An embedded extension's version has to match its host app's, or the build warns
+        # and App Store validation rejects the bundle.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.tv-top-shelf
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ContentProvider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dk.delectosoft.metube.topshelf
+        CODE_SIGN_STYLE: Automatic
+        # Same file and the same reasoning as the app target above — the extension is the
+        # other half of the group, so the two must be entitled together or not at all.
+        CODE_SIGN_ENTITLEMENTS[sdk=appletvsimulator*]: Config/AppGroup.entitlements
+        CODE_SIGN_ENTITLEMENTS[sdk=appletvos*]: $(YT_DEVICE_ENTITLEMENTS)
 
   YouTubeTVUITests:
     type: bundle.ui-testing

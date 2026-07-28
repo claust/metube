@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import TVServices
 
 /// The personalized Home feed: one horizontal, focusable row per YouTube shelf.
 /// Selection is delegated to the orchestrator via `onSelectVideo`.
@@ -198,6 +199,7 @@ struct HomeView: View {
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            updateTopShelf(from: page.sections)
             // Section ids are fresh UUIDs on every load, so a reload (Retry, sign-in again)
             // would otherwise leave this state keyed to rows that no longer exist. The
             // supplementary feeds reload right after this, so one reset covers both lists.
@@ -349,6 +351,24 @@ struct HomeView: View {
         }
         if update(&sections) { return true }
         return update(&extraSections)
+    }
+
+    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
+    /// above the app's icon on the tvOS home screen.
+    ///
+    /// Written here, on every successful first page, because this is the only point where the
+    /// active profile's feed is known to be current — the extension has no token of its own and
+    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
+    /// first one's items means a lead shelf holding a single video still fills both tiles.
+    private func updateTopShelf(from sections: [FeedSection]) {
+        let videos = sections.flatMap(\.items).prefix(TopShelfStore.itemCount).map {
+            TopShelfVideo(
+                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
+        }
+        TopShelfStore.save(Array(videos))
+        // tvOS caches what the provider last returned and would otherwise keep showing it until
+        // it next decides to ask. This is what makes the tiles follow a profile switch.
+        TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
     /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.
