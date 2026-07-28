@@ -63,6 +63,23 @@ rebuilds every row and resets scroll and focus. Doing that unprompted when someo
 from a video would take away the card they meant to play next — the one to the right of what
 they just watched.
 
+## Preview on the focused card
+
+Focusing a card starts the video playing in place of its thumbnail, silently and at normal
+speed, from the beginning. Moving focus away tears the player down and the thumbnail comes
+back. It is only a preview, so nothing is recorded: no watch progress is written and no resume
+position is read, and opening the video for real still starts where the user actually left off.
+
+Playback starts as soon as the card takes focus — the stream has to be resolved first
+(`StreamService`, the same ladder the player uses), so there is a beat before the first frame,
+during which the thumbnail simply stays up and then cross-fades. Losing focus cancels a
+resolution still in flight, so scrolling along a row doesn't leave requests running behind it.
+
+The preview is an `AVPlayerLayer` rather than an `AVPlayerViewController`: no transport bar and
+nothing focusable, both of which would fight the card it sits in. It also leaves `AVAudioSession`
+alone — it is muted, so it must not interrupt whatever else is playing — and doesn't hold the
+screen saver off, since a card left focused is someone who walked away.
+
 ## Card menu — channels and subscriptions (prototype)
 
 Holding **Select** on a card in Home or Search opens a menu for the video's channel:

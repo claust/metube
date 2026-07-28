@@ -54,6 +54,7 @@ struct VideoCard: View {
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .overlay { thumbnail }
+                    .overlay { preview }
                     .overlay(alignment: .bottomTrailing) { durationBadge }
                     .overlay(alignment: .bottom) { progressBar }
                     // Only the top corners are rounded — the bottom edge meets the caption,
@@ -144,6 +145,16 @@ struct VideoCard: View {
             @unknown default:
                 Color.clear
             }
+        }
+    }
+
+    /// The video itself, playing silently over the thumbnail while this card is focused. Built
+    /// only while focused and dropped on the way out — see `VideoPreview`, which owns the whole
+    /// lifetime — so moving focus away stops playback and leaves the thumbnail showing again.
+    @ViewBuilder
+    private var preview: some View {
+        if isFocused {
+            VideoPreview(video: item)
         }
     }
 
