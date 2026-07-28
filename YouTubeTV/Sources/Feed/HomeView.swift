@@ -469,15 +469,19 @@ struct HomeView: View {
     private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
         func update(_ list: inout [FeedSection]) -> Bool {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
-            let existing = Set(list[index].items.map(\.id))
-            let fresh = items.filter { !existing.contains($0.id) }
+            let section = list[index]
+            let existing = Set(section.items.map(\.id))
+            // Shorts belong only in a Shorts row, on a page as much as on the first load — see
+            // `FeedSection.admitting`.
+            let fresh = section.admitting(items).filter { !existing.contains($0.id) }
             list[index] = FeedSection(
                 id: id,
-                title: list[index].title,
-                items: list[index].items + fresh,
+                title: section.title,
+                items: section.items + fresh,
                 // A page that adds nothing new means the row is going in circles: stop, or the
                 // last card stays the trigger and refires on every scroll.
-                continuation: fresh.isEmpty ? nil : continuation
+                continuation: fresh.isEmpty ? nil : continuation,
+                isShorts: section.isShorts
             )
             return true
         }
@@ -492,8 +496,11 @@ struct HomeView: View {
     /// active profile's feed is known to be current — the extension has no token of its own and
     /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
     /// first one's items means a lead shelf holding a single video still fills both tiles.
+    /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
+    /// which is neither the shape nor the metadata a Short has.
     private func updateTopShelf(from sections: [FeedSection]) {
-        let videos = sections.flatMap(\.items).prefix(TopShelfStore.itemCount).map {
+        let videos = sections.filter { !$0.isShorts }
+            .flatMap(\.items).prefix(TopShelfStore.itemCount).map {
             TopShelfVideo(
                 id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
         }

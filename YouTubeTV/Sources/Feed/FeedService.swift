@@ -24,9 +24,12 @@ struct FeedService {
         )
         var result = page(from: json, label: feed.browseId)
 
-        if feed != .home, let first = result.sections.first {
+        // Skips a leading Shorts row: it says what it holds, and naming it after the feed would
+        // both lose that and leave the feed's own heading on the wrong row.
+        if feed != .home, let index = result.sections.firstIndex(where: { !$0.isShorts }) {
             var sections = result.sections
-            sections[0] = FeedSection(
+            let first = sections[index]
+            sections[index] = FeedSection(
                 id: first.id, title: feed.title, items: first.items,
                 continuation: first.continuation)
             result = FeedPage(
@@ -99,11 +102,15 @@ struct FeedService {
 
         // Defensive fallback: the response carried no recognizable shelves, so present
         // everything playable in the tree as one untitled row rather than showing nothing.
+        // Shorts still get a row of their own — the point of separating them isn't the shelf
+        // structure, it's that a portrait tile doesn't belong in a landscape row.
         if sections.isEmpty {
             let items = VideoItemParser.items(in: json)
-            if !items.isEmpty {
-                sections = [FeedSection(title: "", items: items)]
+            let videos = items.filter { !$0.isShort }
+            if !videos.isEmpty {
+                sections = [FeedSection(title: "", items: videos)]
             }
+            sections = merging(items.filter(\.isShort), into: sections)
         }
 
         let token = sectionListContinuation(in: json)
@@ -114,7 +121,7 @@ struct FeedService {
             "[FeedService] \(label): \(sections.count) shelves: "
                 + sections.map {
                     "\($0.title.isEmpty ? "(untitled)" : $0.title)=\($0.items.count)"
-                        + ($0.continuation != nil ? "+" : "")
+                        + ($0.isShorts ? "(shorts)" : "") + ($0.continuation != nil ? "+" : "")
                 }
                 .joined(separator: ", ") + " | more: \(token != nil)")
         #endif
@@ -192,29 +199,92 @@ struct FeedService {
 
     // MARK: - Shelf grouping
 
-    /// Renderer names that wrap one horizontal row of the TV feed.
+    /// One shelf renderer, with which kind of shelf it was — the only thing that identifies a
+    /// Shorts row before its cells have been looked at.
+    private struct Shelf {
+        let renderer: [String: Any]
+        let isReel: Bool
+    }
+
+    /// Renderer names that wrap one horizontal row of the TV feed. `reelShelfRenderer` is the
+    /// Shorts row's own wrapper, and the one shelf kind whose contents are Shorts by definition.
     private static let shelfRendererNames = ["shelfRenderer", "reelShelfRenderer"]
+    private static let reelShelfRendererName = "reelShelfRenderer"
+
+    /// The heading a synthesized Shorts row gets — one built out of the Shorts that were mixed
+    /// into ordinary shelves, when the response has no Shorts shelf of its own to add them to.
+    private static let shortsShelfTitle = "Shorts"
 
     /// Collects each shelf in the response as its own section, in document order.
+    ///
+    /// Shorts are separated out as it goes: a Shorts shelf becomes a Shorts section, and the
+    /// Shorts YouTube mixes into ordinary shelves (Recommended included) are lifted out of them
+    /// and collected into the response's Shorts row instead, so a portrait tile never turns up
+    /// mid-row among landscape ones.
     private func parseSections(in json: [String: Any]) -> [FeedSection] {
         var sections: [FeedSection] = []
         // Shelves can nest (a shelf whose content is itself shelf-shaped). Tracking every
         // videoId already emitted lets us drop a shelf that only repeats an earlier one,
         // without suppressing a video that legitimately appears in two different rows.
         var emitted = Set<String>()
+        // Shorts pulled out of ordinary shelves, in the order they were met. Merged in below,
+        // once every shelf has been seen and it's known whether the response has a Shorts row.
+        var strayShorts: [VideoItem] = []
 
         for shelf in findShelves(in: json) {
-            let items = VideoItemParser.items(in: shelf)
+            let items = VideoItemParser.items(in: shelf.renderer)
             guard !items.isEmpty else { continue }
 
             // A nested duplicate: every video here was already shown above.
             if items.allSatisfy({ emitted.contains($0.id) }) { continue }
             emitted.formUnion(items.map(\.id))
 
+            // The shelf's own kind comes first: a reel shelf is a Shorts row whatever its cells
+            // happen to look like. A shelf of nothing but Shorts is one too — which is how a
+            // Shorts row laid out as an ordinary shelf still reads as one.
+            let isShorts = shelf.isReel || items.allSatisfy(\.isShort)
+            let title = shelfTitle(shelf.renderer) ?? ""
+            let continuation = rowContinuation(in: shelf.renderer)
+
+            if isShorts {
+                sections.append(
+                    FeedSection(
+                        title: title.isEmpty ? Self.shortsShelfTitle : title,
+                        items: items.map { $0.asShort() },
+                        continuation: continuation, isShorts: true))
+                continue
+            }
+
+            strayShorts.append(contentsOf: items.filter(\.isShort))
+            let videos = items.filter { !$0.isShort }
+            // Everything in the shelf was a Short, and they've been kept for the Shorts row.
+            guard !videos.isEmpty else { continue }
+
             sections.append(
-                FeedSection(
-                    title: shelfTitle(shelf) ?? "", items: items,
-                    continuation: rowContinuation(in: shelf)))
+                FeedSection(title: title, items: videos, continuation: continuation))
+        }
+
+        return merging(strayShorts, into: sections)
+    }
+
+    /// Puts the Shorts lifted out of ordinary shelves where they belong: appended to the
+    /// response's own Shorts row if it has one, or a Shorts row of their own at the end if it
+    /// doesn't. Without this a Short filtered out of Recommended would simply disappear.
+    private func merging(_ shorts: [VideoItem], into sections: [FeedSection]) -> [FeedSection] {
+        guard !shorts.isEmpty else { return sections }
+        var sections = sections
+
+        if let index = sections.firstIndex(where: \.isShorts) {
+            let existing = Set(sections[index].items.map(\.id))
+            let fresh = shorts.filter { !existing.contains($0.id) }
+            guard !fresh.isEmpty else { return sections }
+            sections[index] = FeedSection(
+                id: sections[index].id, title: sections[index].title,
+                items: sections[index].items + fresh,
+                continuation: sections[index].continuation, isShorts: true)
+        } else {
+            sections.append(
+                FeedSection(title: Self.shortsShelfTitle, items: shorts, isShorts: true))
         }
 
         return sections
@@ -230,13 +300,14 @@ struct FeedService {
     /// dictionary in a large response. Recursing after the probe also means an outer shelf is
     /// always emitted before any shelf nested inside it, which is what the nested-duplicate
     /// check in `parseSections` assumes.
-    private func findShelves(in json: [String: Any]) -> [[String: Any]] {
-        var results: [[String: Any]] = []
+    private func findShelves(in json: [String: Any]) -> [Shelf] {
+        var results: [Shelf] = []
         func walk(_ obj: Any) {
             if let dict = obj as? [String: Any] {
                 for name in Self.shelfRendererNames {
                     if let renderer = dict[name] as? [String: Any] {
-                        results.append(renderer)
+                        results.append(
+                            Shelf(renderer: renderer, isReel: name == Self.reelShelfRendererName))
                     }
                 }
                 for value in dict.values { walk(value) }

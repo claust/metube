@@ -7,9 +7,20 @@ enum Metrics {
     static let horizontalInset: CGFloat = 80
     static let cardWidth: CGFloat = 420
     static let cardSpacing: CGFloat = 48
+    /// Shorts tiles are portrait and carry no caption, so they're narrower than a video card and
+    /// sit closer together. 240 at 9:16 comes out ~427 tall — near enough a video card's
+    /// thumbnail-plus-caption height that a Shorts row doesn't tower over the rows around it.
+    static let shortCardWidth: CGFloat = 240
+    static let shortCardSpacing: CGFloat = 28
 }
 
 /// A single focusable video thumbnail card.
+///
+/// Draws two shapes from the same parts, chosen by `item.isShort`: a landscape card with its
+/// channel/title/stats caption, or — for a Short — a portrait tile of nothing but the artwork,
+/// matching the format the video was shot in. A Short carries neither title nor duration (it has
+/// no running time to show), so on that tile the channel's avatar in the bottom-right corner,
+/// which both shapes put in the same place, is the only thing over the image.
 struct VideoCard: View {
     let item: VideoItem
     /// Holding Select on the focused card. The screen showing the cards puts a menu up —
@@ -46,37 +57,27 @@ struct VideoCard: View {
             // panel and butts against its top and side edges, so focusing genuinely enlarges
             // the image rather than framing it.
             VStack(alignment: .leading, spacing: 0) {
-                // A 16:9 box the full width of the card, with the image laid over it and
-                // cropped to fit. Sizing the AsyncImage itself instead would letterbox: the
-                // thumbnails YouTube serves aren't all 16:9 (`hqdefault.jpg` is 4:3 with black
-                // bars baked in), and a fitted image leaves the card's edges showing through.
-                Color.gray.opacity(0.25)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .overlay { thumbnail }
-                    .overlay(alignment: .bottomTrailing) { durationBadge }
-                    .overlay(alignment: .bottom) { progressBar }
-                    // Only the top corners are rounded — the bottom edge meets the caption,
-                    // and matching the panel's radius keeps the two reading as one surface.
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: Self.cornerRadius,
-                            topTrailingRadius: Self.cornerRadius,
-                            style: .continuous
-                        )
-                    )
+                artwork
 
-                caption
+                // A Short's tile is the artwork and nothing else — no title, no stats.
+                if !item.isShort {
+                    caption
+                }
             }
             // Fix the width here rather than outside the button. A wrapping title reports an
             // ideal width far wider than the card, and an outer frame doesn't clamp it — the
             // caption spilled past the thumbnail and dragged the panel out with it.
-            .frame(width: Metrics.cardWidth)
+            .frame(width: item.isShort ? Metrics.shortCardWidth : Metrics.cardWidth)
             // Hung off the card's own bottom-right corner and trimmed by the clip below to about
-            // three quarters of the circle. A background rather than an overlay: the caption is
-            // the card's subject, so a title long enough to reach the corner runs over the
-            // avatar rather than under it.
-            .background(alignment: .bottomTrailing) { channelAvatar }
+            // three quarters of the circle.
+            //
+            // Behind the card where there's a caption for it to show through: a title long
+            // enough to reach the corner then runs over the avatar rather than under it, and the
+            // caption is the card's subject. A Short has no caption — only the opaque artwork,
+            // which would hide it — so there it goes over the top instead. Either way it's
+            // applied before the clip, which is what trims the disc.
+            .background(alignment: .bottomTrailing) { if !item.isShort { channelAvatar } }
+            .overlay(alignment: .bottomTrailing) { if item.isShort { channelAvatar } }
             // The one focus surface: a soft grey panel behind the whole card, in place of the
             // white outline and the white plate that used to sit under the caption. Applied
             // after the avatar so it stays behind it.
@@ -86,12 +87,19 @@ struct VideoCard: View {
             )
             .clipShape(
                 RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+            // A Short's artwork covers that panel completely, so focus needs something the image
+            // can't swallow. Drawn after the clip so the whole ring stays on the tile.
+            .overlay { if item.isShort { focusRing } }
         }
         .buttonStyle(BareButtonStyle(onPressingChanged: pressingChanged))
         // Looks the channel's picture up the first time this card is drawn, if nothing already
         // knows it. The store dedupes by channel and remembers the answer across launches, so a
         // row of cards from one channel costs one request, once.
         .task(id: item.id) { await channelAvatars.resolve(item) }
+        // Stated rather than left to SwiftUI to derive from the caption: a Short's tile has no
+        // caption, so without this it would be an unlabelled button to VoiceOver and to the UI
+        // tests, which identify a card by its label.
+        .accessibilityLabel(accessibilityText)
         .focusEffectDisabled()
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.08 : 1.0)
@@ -127,7 +135,40 @@ struct VideoCard: View {
         action()
     }
 
-    /// The artwork itself. `scaledToFill` overflows the 16:9 box it sits in; the card's
+    /// The thumbnail box: 16:9 for a video, 9:16 for a Short, the full width of the card either
+    /// way, with the image laid over it and cropped to fit. Sizing the `AsyncImage` itself
+    /// instead would letterbox — the thumbnails YouTube serves aren't all the shape of the box
+    /// they go in (`hqdefault.jpg` is 4:3 with black bars baked in) — and a fitted image leaves
+    /// the card's edges showing through.
+    private var artwork: some View {
+        Color.gray.opacity(0.25)
+            .aspectRatio(item.isShort ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay { thumbnail }
+            .overlay(alignment: .bottomTrailing) { durationBadge }
+            .overlay(alignment: .bottom) { progressBar }
+            // A video's bottom edge meets its caption and stays square there; a Short's is the
+            // bottom of the card, so it takes the same radius as the rest of it. Matching the
+            // panel's radius keeps thumbnail and caption reading as one surface.
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: Self.cornerRadius,
+                    bottomLeadingRadius: item.isShort ? Self.cornerRadius : 0,
+                    bottomTrailingRadius: item.isShort ? Self.cornerRadius : 0,
+                    topTrailingRadius: Self.cornerRadius,
+                    style: .continuous
+                )
+            )
+    }
+
+    /// The focus treatment for a Shorts tile, which has no caption and so no grey panel showing:
+    /// a white edge around the artwork, drawn inside the card's own rounded shape.
+    private var focusRing: some View {
+        RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+            .strokeBorder(isFocused ? Color.white : Color.clear, lineWidth: 4)
+    }
+
+    /// The artwork itself. `scaledToFill` overflows the box it sits in; the card's
     /// `clipShape` trims the overflow.
     @ViewBuilder
     private var thumbnail: some View {
@@ -147,16 +188,18 @@ struct VideoCard: View {
         }
     }
 
-    /// The channel's picture, hung off the card's bottom-right corner — below the thumbnail,
-    /// over the caption — so roughly three quarters of the circle shows and the rest runs off
-    /// the card, which does the cropping.
+    /// The channel's picture, hung off the card's bottom-right corner — over the caption on a
+    /// video card, over the artwork on a Short, the same spot on both — so roughly three quarters
+    /// of the circle shows and the rest runs off the card, which does the cropping.
     ///
     /// Sitting the centre `inset` from each edge leaves ~75% of the disc inside the card: the
     /// two clipped caps come to about a quarter of its area.
     @ViewBuilder
     private var channelAvatar: some View {
         if let url = channelAvatars.url(for: item) {
-            let diameter: CGFloat = 88
+            // Scaled to the tile on a Short, which is a little over half a video card's width —
+            // an 88pt disc there would read as the tile's subject rather than as a hint.
+            let diameter: CGFloat = item.isShort ? 64 : 88
             let inset = diameter / 2 * 0.63
 
             AsyncImage(url: url) { image in
@@ -168,11 +211,13 @@ struct VideoCard: View {
             }
             .frame(width: diameter, height: diameter)
             .clipShape(Circle())
-            // A hairline to hold the disc's edge against whichever surface is behind it —
-            // black unfocused, the grey focus panel otherwise.
+            // A hairline to hold the disc's edge against whichever surface is behind it — black
+            // unfocused, the grey focus panel otherwise. A Short's disc sits on the artwork
+            // whether the tile is focused or not, so there it stays light.
             .overlay(
                 Circle().strokeBorder(
-                    isFocused ? Color.black.opacity(0.15) : Color.white.opacity(0.3),
+                    isFocused && !item.isShort
+                        ? Color.black.opacity(0.15) : Color.white.opacity(0.3),
                     lineWidth: 2)
             )
             // Held short of opaque so a long title running under it still reads. The avatar
@@ -185,9 +230,12 @@ struct VideoCard: View {
     /// The running time, tucked into the corner of the thumbnail where YouTube itself puts it.
     /// Its own dark pill rather than bare text — thumbnails are arbitrary images, so nothing
     /// else guarantees contrast under it.
+    ///
+    /// Absent on a Short: it has no running time to badge (YouTube stamps those tiles with a
+    /// Shorts glyph in place of one), and the tile is deliberately just the artwork.
     @ViewBuilder
     private var durationBadge: some View {
-        if !item.duration.isEmpty {
+        if !item.duration.isEmpty && !item.isShort {
             Text(item.duration)
                 .font(.system(size: 18, weight: .semibold))
                 .monospacedDigit()
@@ -258,6 +306,15 @@ struct VideoCard: View {
         return [item.viewCount, age]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
+    }
+
+    /// What the card is called. The same three things the caption shows, in the order a card is
+    /// read aloud — and on a Short, whatever of them the feed supplied, since none of it is on
+    /// screen there.
+    private var accessibilityText: String {
+        [item.title, item.author, stats]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
     }
 }
 
