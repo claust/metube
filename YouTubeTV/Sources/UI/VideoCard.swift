@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Layout constants shared by every screen that shows video cards, so the feed and the
 /// search results line up on the same grid.
@@ -50,6 +51,16 @@ struct VideoCard: View {
     /// The channel line and the stats line bracket the title in the same small type, so the
     /// caption reads as one block with the title as its only emphasis.
     private static let subtitleFont: Font = .system(size: 22, weight: .medium)
+
+    /// The title's own type, the card's only emphasis.
+    private static let titleSize: CGFloat = 30
+    private static let titleFont: Font = .system(size: titleSize, weight: .semibold)
+
+    /// The title box is always two lines tall, whether it holds a wrapped title or the focused
+    /// card's single scrolling line, so taking focus doesn't resize the caption under the
+    /// thumbnail. Measured from the font rather than guessed, so it still fits if the size changes.
+    private static let titleHeight: CGFloat =
+        (UIFont.systemFont(ofSize: titleSize, weight: .semibold).lineHeight * 2).rounded(.up)
 
     var body: some View {
         Button(action: play) {
@@ -145,6 +156,7 @@ struct VideoCard: View {
             .aspectRatio(item.isShort ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay { thumbnail }
+            .overlay { preview }
             .overlay(alignment: .bottomTrailing) { durationBadge }
             .overlay(alignment: .bottom) { progressBar }
             // A video's bottom edge meets its caption and stays square there; a Short's is the
@@ -185,6 +197,16 @@ struct VideoCard: View {
             @unknown default:
                 Color.clear
             }
+        }
+    }
+
+    /// The video itself, playing silently over the thumbnail while this card is focused. Built
+    /// only while focused and dropped on the way out — see `VideoPreview`, which owns the whole
+    /// lifetime — so moving focus away stops playback and leaves the thumbnail showing again.
+    @ViewBuilder
+    private var preview: some View {
+        if isFocused {
+            VideoPreview(video: item)
         }
     }
 
@@ -278,11 +300,7 @@ struct VideoCard: View {
                     .lineLimit(1)
             }
 
-            Text(item.title)
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(isFocused ? .black : .white)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+            title
 
             if !stats.isEmpty {
                 Text(stats)
@@ -291,12 +309,35 @@ struct VideoCard: View {
                     .lineLimit(1)
             }
         }
-        // Room for the channel line, two title lines and the stats line, so a short title
-        // doesn't shrink the card below its neighbours and leave the row's focus panels ragged.
+        // The title box already keeps its two lines; this holds the rest of the caption open too,
+        // so a card missing a channel or stats line doesn't sit shorter than its neighbours and
+        // leave the row's focus panels ragged.
         .frame(maxWidth: .infinity, minHeight: 122, alignment: .topLeading)
         .padding(.horizontal, 14)
         .padding(.top, 12)
         .padding(.bottom, 4)
+    }
+
+    /// The video's title. On the focused card it runs on a single line and slides sideways, so a
+    /// long title can be read in full instead of ending in an ellipsis; every other card keeps
+    /// the quiet two-line wrap. Either way the box is `titleHeight` tall, so the swap doesn't
+    /// move the stats line or change the card's height.
+    @ViewBuilder
+    private var title: some View {
+        Group {
+            if isFocused {
+                ScrollingTitle(text: item.title, font: Self.titleFont)
+                    .foregroundStyle(.black)
+            } else {
+                Text(item.title)
+                    .font(Self.titleFont)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: Self.titleHeight, alignment: .topLeading)
     }
 
     /// "1.2M views · 3 days ago", dropping whichever parts the feed didn't supply. The running
@@ -315,6 +356,87 @@ struct VideoCard: View {
         [item.title, item.author, stats]
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
+    }
+}
+
+/// One line of text that slides left at a constant speed when it is too wide to fit, and sits
+/// still when it isn't.
+///
+/// Two copies of the text with a fixed gap between them, shifted by exactly one copy plus one
+/// gap: when the animation loops, the second copy is standing where the first began, so the
+/// text reappears without a seam and the motion never pauses or jumps back. A single linear
+/// animation runs the whole loop — nothing per-frame, no timer — which is what keeps it smooth.
+private struct ScrollingTitle: View {
+    let text: String
+    let font: Font
+
+    /// Blank run between the end of the text and the start of the repeat, so the two copies
+    /// read as one title coming round again rather than as a doubled word.
+    private static let gap: CGFloat = 90
+
+    /// Points per second. Slow enough to read at across-the-room distance.
+    private static let speed: CGFloat = 60
+
+    /// The title holds still this long before it starts moving, so the opening words can be read
+    /// at the moment the card takes focus rather than sliding out from under the eye.
+    private static let startDelay = Duration.milliseconds(900)
+
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    /// A hair of slack: a title that fills the line to the pixel shouldn't crawl.
+    private var overflows: Bool { textWidth > containerWidth + 1 }
+
+    /// How far the first copy travels before the second one has taken its place.
+    private var shift: CGFloat { textWidth + Self.gap }
+
+    var body: some View {
+        HStack(spacing: Self.gap) {
+            line
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
+                            textWidth = width
+                        }
+                    }
+                }
+
+            // Only drawn when it can actually be reached, so a short title isn't quietly
+            // rendered twice off the right-hand edge.
+            // Hidden from accessibility: it's the same title over again, and the card's label
+            // (which UI tests use as the card's identity) shouldn't say it twice.
+            if overflows { line.accessibilityHidden(true) }
+        }
+        .offset(x: offset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
+                    containerWidth = width
+                }
+            }
+        }
+        .clipped()
+        // Restarts whenever either measurement lands — the first pass runs with both at zero.
+        .task(id: [textWidth, containerWidth]) {
+            offset = 0
+            guard overflows else { return }
+            guard (try? await Task.sleep(for: Self.startDelay)) != nil else { return }
+            withAnimation(
+                .linear(duration: Double(shift / Self.speed)).repeatForever(autoreverses: false)
+            ) {
+                offset = -shift
+            }
+        }
+    }
+
+    /// The text itself, laid out at its natural width however narrow the card is.
+    private var line: some View {
+        Text(text)
+            .font(font)
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
