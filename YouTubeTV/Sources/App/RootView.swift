@@ -31,6 +31,21 @@ struct RootView: View {
                 LoginView()
             }
         }
+        // The clock rides above everything on this screen rather than inside the Home header,
+        // so it stays put while the feed scrolls and is still there on Search and Channel.
+        // Deliberately outside the safe area: the ask is a corner clock, and the tvOS inset
+        // would park it level with the header instead. The player, presented as a cover of its
+        // own, is above this overlay and stays uncluttered.
+        .overlay(alignment: .topTrailing) {
+            ClockView()
+                // Uneven on purpose, so the *digits* sit the same distance from both edges:
+                // the text box carries about 12pt of ascender space above the numerals that
+                // the right edge has no equivalent of.
+                .padding(.top, 36)
+                .padding(.trailing, 46)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .ignoresSafeArea()
+        }
         // Watch history belongs to a profile, so the store follows the active one. Also runs on
         // first appear, which is what loads the history at launch.
         .onChange(of: authStore.activeProfileID, initial: true) { previous, profileID in
