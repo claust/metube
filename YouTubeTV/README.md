@@ -141,6 +141,35 @@ The InnerTube calls behind this (`subscription/subscribe`, `subscription/unsubsc
 `FEchannels`, channel `browse`) are implemented from SmartTube's request shapes and have **not**
 been verified against a live account yet.
 
+## Skipping sponsors (SponsorBlock, prototype)
+
+In-video interruptions — read-out sponsor spots, "smash that subscribe", intros, non-music
+sections of a music video — are skipped automatically using
+[SponsorBlock](https://sponsor.ajay.app), the crowd-sourced database behind the browser
+extension of the same name. Its API is public, free and unauthenticated.
+
+This is **not** ad blocking in the YouTube sense: pre-roll and mid-roll ads served by YouTube
+never reach this app to begin with (the InnerTube clients used for playback hand back a plain
+media stream). What SponsorBlock removes is the sponsor read *inside* the video the creator
+uploaded, which no stream-level blocking can touch.
+
+- Categories skipped by default: `sponsor`, `selfpromo`, `interaction`, `music_offtopic`.
+  `intro`, `outro`, `preview` and `filler` are parsed but off — they are part of the video most
+  people want. The set lives in `SponsorCategory.defaultSkipped`; there is no settings UI yet.
+- The videoId is never sent. Only the **first four hex characters of its SHA-256** go to the
+  server, which answers with every video sharing that prefix (~80 of them); the match happens on
+  device. See `SponsorBlockService`.
+- A skip shows a brief *Skipped sponsor · 42s* toast, so a chunk of video vanishing doesn't read
+  as a stream glitch.
+- Each segment is skipped **once per playback**: rewinding into one (a discount code, or simply
+  wrong timestamps) works normally instead of bouncing the user forward again.
+- Downvoted submissions (`votes < 0`) and segments under a second are ignored; overlapping ones
+  are merged into a single seek. A SponsorBlock outage is silent — the video just plays whole.
+
+Segment lookup runs *after* playback starts, so a slow third-party server can never delay the
+first frame. Verified against the live API; the skip-and-seek behaviour itself has only been
+exercised in the simulator, not on a real Apple TV.
+
 ## Top Shelf
 
 When the app's icon is focused on the tvOS home screen's top row, the strip above it shows the
@@ -321,13 +350,14 @@ U+16CA points the wrong way and U+16CC is barely more than a tick.
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
 - `Sources/Search` — TV `search` + `SearchView` (reached from the icon in the Home header)
 - `Sources/UI` — the video card and layout metrics both screens share
-- `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController`
+- `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController` + SponsorBlock skipping
 - `TopShelf/` — the Top Shelf extension; shares only `Sources/Core/TopShelf.swift` with the app
 - `reference/` — distilled InnerTube notes and captured sample responses
 
 ## Scope / limitations
 
-Intentionally minimal: no subscriptions management beyond the card menu, and no ad blocking.
+Intentionally minimal: no subscriptions management beyond the card menu, and no ad blocking
+beyond the in-video SponsorBlock segments described above.
 Shorts are shown and play in the ordinary player — there is no vertical swipe-through reel.
 
 Search is one page of results with no filters and no paging past it — enough to find and

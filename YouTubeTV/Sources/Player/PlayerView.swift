@@ -11,6 +11,7 @@ struct PlayerView: View {
     @EnvironmentObject private var watchProgress: WatchProgressStore
 
     @State private var player: AVPlayer?
+    @StateObject private var skipper = SponsorBlockSkipper()
     @State private var loadError: Error?
     @State private var isLoading = true
     @State private var didPlayToEndObserver: NSObjectProtocol?
@@ -34,6 +35,10 @@ struct PlayerView: View {
                 loadingOverlay
             } else if let loadError {
                 errorOverlay(loadError)
+            }
+
+            if let skip = skipper.lastSkip {
+                skipToast(skip)
             }
         }
         .task { await load() }
@@ -76,6 +81,29 @@ struct PlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
+    }
+
+    /// Confirms a skip actually happened, and says what was cut — without it a sponsor read
+    /// simply vanishing looks like the stream glitching.
+    private func skipToast(_ skip: SponsorBlockSkipper.Skip) -> some View {
+        VStack {
+            HStack(spacing: 16) {
+                Image(systemName: "forward.fill")
+                Text("Skipped \(skip.category.displayName.lowercased()) · \(Int(skip.savedSeconds.rounded()))s")
+            }
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 18)
+            .background(.black.opacity(0.65), in: Capsule())
+            .padding(.top, 60)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: skip.id)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Lifecycle
@@ -122,6 +150,15 @@ struct PlayerView: View {
             #endif
             self.player = avPlayer
             avPlayer.play()
+
+            // Deliberately after playback has started, and not raced against the stream
+            // resolution with `async let`: SponsorBlock is a nice-to-have, and waiting on a
+            // third-party server before showing the first frame would trade a certain delay
+            // for an uncertain benefit. Attaching a second or two in only matters for a
+            // segment in the opening seconds — rare, and it still gets skipped on the next
+            // tick if playback is still inside it.
+            isLoading = false
+            await loadSponsorSegments(for: avPlayer)
         } catch {
             // The view was dismissed while loading — not a real error, so don't show the
             // error overlay.
@@ -129,6 +166,32 @@ struct PlayerView: View {
             // A real failure: don't hold the audio session while only an error is shown.
             deactivateAudioSession()
             self.loadError = error
+        }
+    }
+
+    /// Looks up the community's segment list for this video and hands it to the skipper.
+    ///
+    /// Every failure is swallowed: no segments simply means nothing gets skipped, which is
+    /// exactly how the player behaved before. Nothing here is worth an error overlay on a video
+    /// that is already playing fine.
+    @MainActor
+    private func loadSponsorSegments(for player: AVPlayer) async {
+        do {
+            let segments = try await SponsorBlockService.fetchSegments(videoId: video.id)
+            // The view can be dismissed, or `load()` can have re-run and built a new player,
+            // while the request was in flight — attaching to a player nobody is watching would
+            // leave a periodic observer running on it.
+            guard !Task.isCancelled, self.player === player else { return }
+            skipper.attach(to: player, segments: segments)
+            #if DEBUG
+            print("[SponsorBlock] \(segments.count) segment(s) for \(video.id)")
+            #endif
+        } catch {
+            #if DEBUG
+            if !isCancellation(error) {
+                print("[SponsorBlock] lookup failed: \(error.localizedDescription)")
+            }
+            #endif
         }
     }
 
@@ -242,6 +305,9 @@ struct PlayerView: View {
         // Unconditionally: the observer belongs to the player, not to its item, so an item
         // that has gone away must not leave it installed.
         removeTimeObserver()
+        // Same reasoning, and it has to happen before `player` is dropped — the skipper only
+        // holds it weakly and can't hand its own token back once it's gone.
+        skipper.detach()
         if let didPlayToEndObserver {
             NotificationCenter.default.removeObserver(didPlayToEndObserver)
             self.didPlayToEndObserver = nil
