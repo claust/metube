@@ -42,12 +42,26 @@ Sign in by visiting the shown URL on your phone/computer and entering the code (
 ## Profiles
 
 Several YouTube accounts can be signed in at once. The Home header shows one avatar per account
-— the active one ringed — plus a plus button that runs the sign-in flow again for another
-account. Pressing an avatar offers *Use this profile* and *Sign out*.
+— the active one ringed and shown first — plus a plus button that runs the sign-in flow again for
+another account. Pressing another account's avatar switches to it straight away; pressing the
+active one offers *Sign out*.
 
 Each profile keeps its own OAuth tokens (Keychain) and its own watch progress, so the feed,
 history and resume positions are whatever that account sees. Signing a profile out deletes its
 watch progress along with its credentials.
+
+## Refreshing the feed
+
+The feed is checked for new videos in the background — when the app comes back to the
+foreground, and when you return to Home from a video or from Search — but only if what's on
+screen is more than 15 minutes old.
+
+A newer feed is never swapped in on its own. It waits behind a **_n_ new videos** button in the
+Home header, and only appears there if the fetch actually turned up videos that aren't already
+on screen. This is deliberate: shelf ids are regenerated on every load, so applying a feed
+rebuilds every row and resets scroll and focus. Doing that unprompted when someone comes back
+from a video would take away the card they meant to play next — the one to the right of what
+they just watched.
 
 ## Card menu — channels and subscriptions (prototype)
 
@@ -85,6 +99,10 @@ A tile's action is a `metube://video?id=…` URL, built and parsed in one place
 (`TopShelfLink`) since it is the one thing the two processes must agree on exactly.
 `RootView.onOpenURL` turns it back into a `VideoItem` — titled from the same snapshot the tile
 was drawn from — and presents the player.
+
+The extension takes precedence over the static Top Shelf image in the asset catalog, which
+stays as the fallback: it is what shows while nobody is signed in, or before the feed has
+loaded once, because the provider answers `nil` rather than an empty shelf in those cases.
 
 Both targets sign against the same `Config/AppGroup.entitlements` — they need the identical
 group, or each would see its own empty store. Which builds get it is split by SDK, because App
@@ -210,6 +228,30 @@ xcrun swift-format format -i --recursive Sources UITests       # auto-fix layout
 swift-format owns layout (4-space indent, 120-column lines); SwiftLint enforces
 everything else. Both run in CI (`.github/workflows/tvos-ci.yml`) with `--strict`,
 so any violation blocks the merge.
+
+## App icon
+
+The mark is a rune monogram for *Fjernsyn*: **ᚠ** (U+16A0, fehu/fé, "f") beside **ᛋ** (U+16CB,
+long-branch sól, "s"), in the red ochre that runestone carvings were painted with. Both are real
+runes for their own sound, set from the actual Unicode codepoints in Apple Symbols — the one
+runic-capable system font whose terminals are cut at an angle, which reads as chisel work.
+
+The artwork is generated rather than checked in as an opaque bitmap, so the design lives in one
+editable file:
+
+```sh
+Scripts/generate-app-icon.py
+```
+
+That rewrites `Sources/Resources/Assets.xcassets/App Icon & Top Shelf Image.brandassets`. The
+generated PNGs *are* committed, so a normal build needs neither the script nor the font. tvOS wants
+the icon as a layered image stack, which the system separates in 3D when the icon is focused; here
+the stone slab is the back layer, the chiselled groove the middle, and the red paint the front, so
+focusing the icon lifts the paint off the stone.
+
+Two things to know before reusing this elsewhere: it renders through a macOS system font, so the
+outlines are Apple's; and of the three S runes in the Runic block, only U+16CB is usable here —
+U+16CA points the wrong way and U+16CC is barely more than a tick.
 
 ## Structure
 

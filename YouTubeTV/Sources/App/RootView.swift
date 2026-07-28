@@ -67,6 +67,10 @@ struct RootView: View {
     private var feed: some View {
         NavigationStack(path: $path) {
             HomeView(
+                // Home is only in front when nothing is presented over it. It uses this to
+                // decide when looking for a fresher feed is worthwhile — and, more to the
+                // point, never applies one while a video is playing.
+                isFrontmost: selectedVideo == nil && path.isEmpty,
                 onSelectVideo: { selectedVideo = $0 },
                 onOpenSearch: { path.append(.search) },
                 onAddProfile: { isAddingProfile = true },
