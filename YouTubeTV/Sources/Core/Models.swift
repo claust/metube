@@ -135,6 +135,9 @@ struct ChannelPage {
     /// falls back to the name on the card the user came from.
     let title: String
     let avatarURL: URL?
+    /// The channel's banner, already cropped to 16:9 by YouTube for TV clients, for drawing
+    /// behind the header. `nil` when the channel has set no banner.
+    let bannerURL: URL?
     /// Whether the account subscribes, per the page's own subscribe button. `nil` when the page
     /// carried no button — not the same as "no", so callers must leave their state alone.
     let isSubscribed: Bool?

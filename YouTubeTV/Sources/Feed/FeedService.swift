@@ -56,6 +56,7 @@ struct FeedService {
         return ChannelPage(
             title: channelTitle(in: json) ?? "",
             avatarURL: channelAvatarURL(in: json),
+            bannerURL: channelBannerURL(in: json),
             isSubscribed: subscribedState(in: json),
             feed: page(from: json, label: "channel \(id)")
         )
@@ -321,13 +322,20 @@ struct FeedService {
 
     // MARK: - Channel header
 
-    /// The channel's name. `c4TabbedHeaderRenderer` is the long-standing shape;
-    /// `pageHeaderRenderer` is the view-model-era one some channels now answer with. Both are
-    /// searched for rather than pathed to, because which one arrives varies by channel.
+    /// The channel's name.
+    ///
+    /// `channelHeaderRenderer` is what TVHTML5 answers with (verified 2026-07-28 across four
+    /// channels). `c4TabbedHeaderRenderer` and `pageHeaderRenderer` are the web shapes, kept as
+    /// fallbacks in case a channel or a client bump hands back one of those instead. All three
+    /// are searched for rather than pathed to, because which one arrives varies.
     private func channelTitle(in json: [String: Any]) -> String? {
-        for header in findAllRenderers(named: "c4TabbedHeaderRenderer", in: json) {
-            if let text = innerTubeText(header["title"]) ?? header["title"] as? String, !text.isEmpty {
-                return text
+        for name in ["channelHeaderRenderer", "c4TabbedHeaderRenderer"] {
+            for header in findAllRenderers(named: name, in: json) {
+                if let text = innerTubeText(header["title"]) ?? header["title"] as? String,
+                    !text.isEmpty
+                {
+                    return text
+                }
             }
         }
         for header in findAllRenderers(named: "pageHeaderRenderer", in: json) {
@@ -337,14 +345,49 @@ struct FeedService {
     }
 
     private func channelAvatarURL(in json: [String: Any]) -> URL? {
-        for header in findAllRenderers(named: "c4TabbedHeaderRenderer", in: json) {
-            if let thumbs = header.value(at: "avatar/thumbnails") as? [[String: Any]],
-                let url = largestThumbnailURL(thumbs)
-            {
-                return url
+        for name in ["channelHeaderRenderer", "c4TabbedHeaderRenderer"] {
+            for header in findAllRenderers(named: name, in: json) {
+                guard let thumbs = header.value(at: "avatar/thumbnails") as? [[String: Any]] else {
+                    continue
+                }
+                // By path, not by host: the header's banner is served from the same CDN as its
+                // avatar, so a host test can't tell them apart. Same reasoning as
+                // `ChannelAvatarService`.
+                if let url = avatarURL(from: thumbs) { return url }
             }
         }
         return nil
+    }
+
+    /// The channel's banner, for drawing behind the header.
+    ///
+    /// TVHTML5 hands back the 16:9 crop of it (the URLs carry `fcrop64`), not the wide strip
+    /// youtube.com shows, so it can go full-bleed behind the header as-is. The rungs run
+    /// 320×180 up to 2120×1192; `bannerWidth` picks the one that covers a 1080p screen without
+    /// paying for the oversize top rung.
+    private func channelBannerURL(in json: [String: Any]) -> URL? {
+        for name in ["channelHeaderRenderer", "c4TabbedHeaderRenderer"] {
+            for header in findAllRenderers(named: name, in: json) {
+                let thumbs =
+                    header.value(at: "backgroundImage/thumbnails") as? [[String: Any]]
+                    ?? header.value(at: "banner/thumbnails") as? [[String: Any]]
+                guard let thumbs, !thumbs.isEmpty else { continue }
+                if let url = bannerURL(from: thumbs) { return url }
+            }
+        }
+        return nil
+    }
+
+    /// The narrowest rung that still covers the screen, falling back to the widest on offer.
+    private func bannerURL(from thumbs: [[String: Any]]) -> URL? {
+        func width(_ image: [String: Any]) -> Int { (image["width"] as? NSNumber)?.intValue ?? 0 }
+        let wanted = 1920
+        let best =
+            thumbs.filter { width($0) >= wanted }.min { width($0) < width($1) }
+            ?? thumbs.max { width($0) < width($1) }
+        guard var urlString = best?["url"] as? String, !urlString.isEmpty else { return nil }
+        if urlString.hasPrefix("//") { urlString = "https:" + urlString }
+        return URL(string: urlString)
     }
 
     /// Whether the account subscribes to this channel, per the header's own subscribe button.

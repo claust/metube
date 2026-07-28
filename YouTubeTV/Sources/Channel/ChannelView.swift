@@ -23,6 +23,7 @@ struct ChannelView: View {
 
     @State private var title = ""
     @State private var avatarURL: URL?
+    @State private var bannerURL: URL?
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -38,8 +39,10 @@ struct ChannelView: View {
     private static let maxRowPages = 10
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
+
+            banner
 
             content
         }
@@ -106,6 +109,50 @@ struct ChannelView: View {
         .focusSection()
     }
 
+    /// The channel's own banner, full-bleed behind the header.
+    ///
+    /// Fixed rather than scrolling: it's the backdrop the header sits on, and the gradient has
+    /// reached solid black by the time the first row of cards reaches it, so nothing scrolls
+    /// across a lit part of the image. Hidden while loading and on the error screen, both of
+    /// which want the plain black background.
+    @ViewBuilder
+    private var banner: some View {
+        if let bannerURL, !isLoading, errorMessage == nil {
+            AsyncImage(url: bannerURL) { phase in
+                if case .success(let image) = phase {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .transition(.opacity.animation(.easeOut(duration: 0.35)))
+                }
+            }
+            .frame(height: Self.bannerHeight)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            // The image is the channel's own artwork, so it can be anything: the scrim keeps
+            // white header text readable over a bright banner, and lands on solid black at the
+            // bottom so there's no seam where the image ends.
+            .overlay(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.45), location: 0),
+                        .init(color: .black.opacity(0.7), location: 0.5),
+                        .init(color: .black, location: 0.92),
+                        .init(color: .black, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// Tall enough to sit behind the header and fade out before the first row, on a 1080p screen.
+    private static let bannerHeight: CGFloat = 520
+
     @ViewBuilder
     private var avatar: some View {
         if let avatarURL {
@@ -169,6 +216,7 @@ struct ChannelView: View {
 
             title = page.title
             avatarURL = page.avatarURL
+            bannerURL = page.bannerURL
             sections = page.feed.sections
             rowsLoadingMore = []
             rowPagesLoaded = [:]
