@@ -48,6 +48,7 @@ enum VideoItemParser {
         case lockup  // the newer view-model shape search returns most of its hits in
         case gridVideo  // older browse responses
         case video  // older search/browse responses
+        case reel  // a Short, in the cell a reel shelf holds
 
         var key: String {
             switch self {
@@ -55,6 +56,7 @@ enum VideoItemParser {
             case .lockup: return "lockupViewModel"
             case .gridVideo: return "gridVideoRenderer"
             case .video: return "videoRenderer"
+            case .reel: return "reelItemRenderer"
             }
         }
 
@@ -63,7 +65,10 @@ enum VideoItemParser {
             switch self {
             case .tile: return parseTile(cell)
             case .lockup: return parseLockup(cell)
-            case .gridVideo, .video: return parseVideoRenderer(cell)
+            // A reel cell is the same shape as the older renderers as far as anything read here
+            // goes — `videoId`, `headline`, `thumbnail.thumbnails`, `viewCountText` — and it
+            // names itself a Short through the `reelWatchEndpoint` it navigates by.
+            case .gridVideo, .video, .reel: return parseVideoRenderer(cell)
             }
         }
     }
@@ -96,6 +101,7 @@ private func parseTile(_ tile: [String: Any]) -> VideoItem? {
         }
     }
 
+    let thumbnails = tileThumbnails(tile)
     let metadata = tile.value(at: "metadata/tileMetadataRenderer") as? [String: Any]
     let lines = metadata?["lines"] as? [[String: Any]] ?? []
     let parts = Subtitle(
@@ -109,11 +115,12 @@ private func parseTile(_ tile: [String: Any]) -> VideoItem? {
         title: innerTubeText(metadata?["title"]) ?? "",
         author: parts.author,
         channelID: channelID(in: tile),
-        thumbnailURL: tileThumbnailURL(tile) ?? fallbackThumbnail(videoId),
+        thumbnailURL: thumbnails.flatMap(largestThumbnailURL) ?? fallbackThumbnail(videoId),
         channelAvatarURL: channelAvatarURL(in: tile),
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
-        duration: durationOverlay(in: tile)
+        duration: durationOverlay(in: tile),
+        isShort: isShort(cell: tile, thumbnails: thumbnails)
     )
 }
 
@@ -124,12 +131,9 @@ private func tileVideoId(_ tile: [String: Any]) -> String? {
     return nil
 }
 
-/// Picks the largest-width thumbnail from the tile header.
-private func tileThumbnailURL(_ tile: [String: Any]) -> URL? {
-    guard let thumbs = tile.value(at: "header/tileHeaderRenderer/thumbnail/thumbnails") as? [[String: Any]] else {
-        return nil
-    }
-    return largestThumbnailURL(thumbs)
+/// The tile header's image list, which the artwork and the Shorts check both read.
+private func tileThumbnails(_ tile: [String: Any]) -> [[String: Any]]? {
+    tile.value(at: "header/tileHeaderRenderer/thumbnail/thumbnails") as? [[String: Any]]
 }
 
 // MARK: - lockupViewModel (search results)
@@ -143,6 +147,7 @@ private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
     guard (lockup["contentType"] as? String) == "LOCKUP_CONTENT_TYPE_VIDEO" else { return nil }
     guard let videoId = lockupVideoId(lockup) else { return nil }
 
+    let thumbnails = lockupThumbnails(lockup)
     let metadata = lockup.value(at: "metadata/lockupMetadataViewModel") as? [String: Any]
     let rows = metadata?.value(at: "metadata/contentMetadataViewModel/metadataRows") as? [[String: Any]] ?? []
     let parts = Subtitle(
@@ -156,11 +161,12 @@ private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
         title: metadata?.string(at: "title/content") ?? "",
         author: parts.author,
         channelID: channelID(in: lockup),
-        thumbnailURL: lockupThumbnailURL(lockup) ?? fallbackThumbnail(videoId),
+        thumbnailURL: thumbnails.flatMap(largestThumbnailURL) ?? fallbackThumbnail(videoId),
         channelAvatarURL: channelAvatarURL(in: lockup),
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
-        duration: lockupDuration(lockup)
+        duration: lockupDuration(lockup),
+        isShort: isShort(cell: lockup, thumbnails: thumbnails)
     )
 }
 
@@ -184,10 +190,8 @@ private func lockupDuration(_ lockup: [String: Any]) -> String {
     return ""
 }
 
-private func lockupThumbnailURL(_ lockup: [String: Any]) -> URL? {
-    let path = "contentImage/thumbnailViewModel/image/sources"
-    guard let sources = lockup.value(at: path) as? [[String: Any]] else { return nil }
-    return largestThumbnailURL(sources)
+private func lockupThumbnails(_ lockup: [String: Any]) -> [[String: Any]]? {
+    lockup.value(at: "contentImage/thumbnailViewModel/image/sources") as? [[String: Any]]
 }
 
 // MARK: - gridVideoRenderer / videoRenderer (older browse and search responses)
@@ -195,10 +199,7 @@ private func lockupThumbnailURL(_ lockup: [String: Any]) -> URL? {
 private func parseVideoRenderer(_ renderer: [String: Any]) -> VideoItem? {
     guard let videoId = renderer["videoId"] as? String, !videoId.isEmpty else { return nil }
 
-    var thumbURL: URL?
-    if let thumbs = renderer.value(at: "thumbnail/thumbnails") as? [[String: Any]] {
-        thumbURL = largestThumbnailURL(thumbs)
-    }
+    let thumbnails = renderer.value(at: "thumbnail/thumbnails") as? [[String: Any]]
 
     // These renderers name the age and view count outright instead of burying them in
     // subtitle lines. `shortViewCountText` is the abbreviated form ("1.2M views") the tile
@@ -212,16 +213,77 @@ private func parseVideoRenderer(_ renderer: [String: Any]) -> VideoItem? {
         author: innerTubeText(renderer.value(at: "longBylineText"))
             ?? innerTubeText(renderer.value(at: "shortBylineText")) ?? "",
         channelID: channelID(in: renderer),
-        thumbnailURL: thumbURL ?? fallbackThumbnail(videoId),
+        thumbnailURL: thumbnails.flatMap(largestThumbnailURL) ?? fallbackThumbnail(videoId),
         channelAvatarURL: channelAvatarURL(in: renderer),
         publishedAt: published,
         viewCount: views,
         // `lengthText` is this shape's own field; the overlay is the shared fallback.
-        duration: innerTubeText(renderer["lengthText"]) ?? durationOverlay(in: renderer)
+        duration: innerTubeText(renderer["lengthText"]) ?? durationOverlay(in: renderer),
+        isShort: isShort(cell: renderer, thumbnails: thumbnails)
     )
 }
 
+// MARK: - Shorts
+
+/// Whether a cell is a Short rather than an ordinary video.
+///
+/// No single field says so on every shape, and the TV feed drops Shorts into ordinary shelves
+/// (a Short turned up in Recommended, which is what this is for), so several independent signals
+/// are taken together — any one is enough:
+///
+/// * A `reelWatchEndpoint` anywhere in the cell. Selecting a Short opens the reel player rather
+///   than the watch page, and only a Short carries that command. Searched for rather than pathed
+///   to: a tile carries it as its select command, other shapes bury it in overlays.
+/// * A `contentType` naming Shorts, which is how the tile and view-model shapes classify a cell.
+/// * A `thumbnailOverlayTimeStatusRenderer` with `style: "SHORTS"` — the badge that replaces the
+///   running time on a Short, which is also why a Short has no duration to show.
+/// * Portrait artwork. Shorts are served as tall images and nothing else in a feed is, so this
+///   catches a cell that labels itself in none of the other ways.
+private func isShort(cell: [String: Any], thumbnails: [[String: Any]]?) -> Bool {
+    if containsKey("reelWatchEndpoint", in: cell) { return true }
+    if (cell["contentType"] as? String)?.contains("SHORT") == true { return true }
+    if findAllRenderers(named: "thumbnailOverlayTimeStatusRenderer", in: cell)
+        .contains(where: { ($0["style"] as? String) == "SHORTS" })
+    {
+        return true
+    }
+    return thumbnails.map(isPortrait) ?? false
+}
+
+/// Whether `name` is a key anywhere in the subtree.
+private func containsKey(_ name: String, in json: Any) -> Bool {
+    if let dict = json as? [String: Any] {
+        if dict[name] != nil { return true }
+        return dict.values.contains { containsKey(name, in: $0) }
+    }
+    if let array = json as? [Any] {
+        return array.contains { containsKey(name, in: $0) }
+    }
+    return false
+}
+
+/// Whether an image list is taller than it is wide. Every sized entry has to agree: a list is a
+/// ladder of renders of one image, so a single landscape entry means this isn't portrait artwork.
+/// Entries without usable dimensions are ignored, and a list with none at all isn't evidence
+/// either way — `false`, leaving the other two signals to decide.
+private func isPortrait(_ images: [[String: Any]]) -> Bool {
+    let sized = images.compactMap { image -> (width: Int, height: Int)? in
+        guard let width = intValue(image["width"]), let height = intValue(image["height"]),
+            width > 0, height > 0
+        else { return nil }
+        return (width, height)
+    }
+    guard !sized.isEmpty else { return false }
+    return sized.allSatisfy { $0.height > $0.width }
+}
+
 // MARK: - Shared helpers
+
+/// InnerTube sends image dimensions as JSON numbers, which `JSONSerialization` hands back as
+/// either `Int` or `Double` depending on how they were written.
+private func intValue(_ value: Any?) -> Int? {
+    (value as? Int) ?? (value as? Double).map(Int.init)
+}
 
 /// The three things worth showing, picked out of a cell's subtitle text.
 ///
@@ -335,9 +397,7 @@ private func channelAvatarURL(in cell: [String: Any]) -> URL? {
 /// the smallest one that still covers how big the card draws it wins — larger is wasted bytes
 /// across a screenful of cards, smaller goes soft.
 func avatarURL(from images: [[String: Any]]) -> URL? {
-    func width(_ image: [String: Any]) -> Int {
-        (image["width"] as? Int) ?? (image["width"] as? Double).map(Int.init) ?? 0
-    }
+    func width(_ image: [String: Any]) -> Int { intValue(image["width"]) ?? 0 }
 
     let avatars = images.filter { image in
         guard let url = image["url"] as? String else { return false }
@@ -376,9 +436,7 @@ private func resized(_ urlString: String, to size: Int) -> String {
 /// `url`/`width` even though nothing else about them matches.
 func largestThumbnailURL(_ thumbs: [[String: Any]]) -> URL? {
     let best = thumbs.max { a, b in
-        let wa = (a["width"] as? Int) ?? (a["width"] as? Double).map(Int.init) ?? 0
-        let wb = (b["width"] as? Int) ?? (b["width"] as? Double).map(Int.init) ?? 0
-        return wa < wb
+        (intValue(a["width"]) ?? 0) < (intValue(b["width"]) ?? 0)
     }
     guard var urlString = best?["url"] as? String, !urlString.isEmpty else { return nil }
     // Some thumbnail URLs are protocol-relative (//i.ytimg.com/...).

@@ -27,7 +27,9 @@ struct FeedRow: View {
             }
 
             ScrollView(.horizontal) {
-                LazyHStack(spacing: Metrics.cardSpacing) {
+                // Shorts tiles are narrow, so a video card's gap between them would read as a
+                // row of gaps. Kept proportional to the tile instead.
+                LazyHStack(spacing: section.isShorts ? Metrics.shortCardSpacing : Metrics.cardSpacing) {
                     ForEach(section.items) { item in
                         VideoCard(
                             item: item,

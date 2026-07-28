@@ -63,6 +63,33 @@ rebuilds every row and resets scroll and focus. Doing that unprompted when someo
 from a video would take away the card they meant to play next — the one to the right of what
 they just watched.
 
+## Shorts
+
+Shorts get a row of their own and a tile of their own, and appear nowhere else.
+
+The tile is portrait (9:16, 240pt wide) with no title, no stats and no duration badge — a Short
+has no running time to show, and the format is the point. The only thing over the artwork is the
+channel's avatar, in the same bottom-right corner a video card puts it in, and the focus
+treatment is a white edge around the tile rather than the grey caption panel a video card lights
+up (a Short's artwork covers that panel completely).
+
+Rows are split in `FeedService.parseSections`. A `reelShelfRenderer`, or any shelf holding
+nothing but Shorts, becomes a Shorts row; every other row has its Shorts lifted out, because
+YouTube mixes them into ordinary shelves — one turned up in Recommended. Lifted Shorts are
+appended to that response's Shorts row, or collected into one at the end of the page if it has
+none, so filtering them out never loses them. Row paging applies the same rule on every page
+(`FeedSection.admitting`) — a continuation reply is a bare list of cells with nothing naming the
+shelf it belongs to, so the row it lands in is what decides.
+
+A cell is taken to be a Short if any of these hold, since no single field is on every cell shape:
+a `reelWatchEndpoint` anywhere in it, a `contentType` naming Shorts, a
+`thumbnailOverlayTimeStatusRenderer` with `style: "SHORTS"`, or portrait artwork. The Top Shelf
+skips Shorts — it draws its tiles wide, with the title beside the artwork, which is neither the
+shape nor the metadata a Short has.
+
+A focused Shorts tile previews like any other card — a portrait video in a portrait box, so it
+fills the tile exactly.
+
 ## Preview on the focused card
 
 Focusing a card starts the video playing in place of its thumbnail, silently and at normal
@@ -283,7 +310,8 @@ U+16CA points the wrong way and U+16CC is barely more than a tick.
 
 ## Scope / limitations
 
-Intentionally minimal: no subscriptions management, shorts, or ad blocking.
+Intentionally minimal: no subscriptions management beyond the card menu, and no ad blocking.
+Shorts are shown and play in the ordinary player — there is no vertical swipe-through reel.
 
 Search is one page of results with no filters and no paging past it — enough to find and
 play something, not a replacement for YouTube's search UI.

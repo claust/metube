@@ -224,15 +224,18 @@ struct ChannelView: View {
     @discardableResult
     private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
         guard let index = sections.firstIndex(where: { $0.id == id }) else { return false }
-        let existing = Set(sections[index].items.map(\.id))
-        let fresh = items.filter { !existing.contains($0.id) }
+        let section = sections[index]
+        let existing = Set(section.items.map(\.id))
+        // Shorts belong only in a Shorts row — see `FeedSection.admitting`.
+        let fresh = section.admitting(items).filter { !existing.contains($0.id) }
         sections[index] = FeedSection(
             id: id,
-            title: sections[index].title,
-            items: sections[index].items + fresh,
+            title: section.title,
+            items: section.items + fresh,
             // A page that adds nothing new means the row is going in circles: stop, or the last
             // card stays the trigger and refires on every scroll.
-            continuation: fresh.isEmpty ? nil : continuation
+            continuation: fresh.isEmpty ? nil : continuation,
+            isShorts: section.isShorts
         )
         return true
     }

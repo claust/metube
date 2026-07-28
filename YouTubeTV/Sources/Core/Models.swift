@@ -23,11 +23,17 @@ struct VideoItem: Identifiable, Hashable {
     /// Running time as InnerTube renders it on the thumbnail ("21:55", "1:02:14"). Empty for
     /// live streams and anything the feed didn't label.
     let duration: String
+    /// Whether this is a Short rather than an ordinary video — see `VideoItemParser`'s
+    /// detection. Shorts are drawn as portrait tiles and only ever shown in a Shorts row, so
+    /// this decides both which section the item may appear in and how its card looks.
+    /// `var` so a row known to be a Shorts row can vouch for items its cells didn't label
+    /// (see `asShort()`).
+    var isShort: Bool
 
     init(
         id: String, title: String, author: String = "", channelID: String? = nil,
         thumbnailURL: URL? = nil, channelAvatarURL: URL? = nil, publishedAt: Date? = nil,
-        viewCount: String = "", duration: String = ""
+        viewCount: String = "", duration: String = "", isShort: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -38,6 +44,18 @@ struct VideoItem: Identifiable, Hashable {
         self.publishedAt = publishedAt
         self.viewCount = viewCount
         self.duration = duration
+        self.isShort = isShort
+    }
+
+    /// This item, marked as a Short.
+    ///
+    /// Used where the *row* is the evidence: the cells a Shorts shelf pages in don't always
+    /// carry the reel endpoint or the portrait artwork their first-page siblings do, and a card
+    /// that arrived in a Shorts row is a Short whatever its cell looked like.
+    func asShort() -> VideoItem {
+        var copy = self
+        copy.isShort = true
+        return copy
     }
 }
 
@@ -52,15 +70,30 @@ struct FeedSection: Identifiable, Hashable {
     /// Token that fetches more videos for *this row* (scrolling right). Separate from
     /// `FeedPage.continuation`, which fetches more rows. `nil` once the row is exhausted.
     let continuation: String?
+    /// Whether this row holds Shorts. Shorts live in a row of their own — they're filtered out
+    /// of every other one — so this is the one place they appear, and it's what tells the row
+    /// to lay its cards out portrait.
+    let isShorts: Bool
 
     init(
         id: String = UUID().uuidString, title: String, items: [VideoItem],
-        continuation: String? = nil
+        continuation: String? = nil, isShorts: Bool = false
     ) {
         self.id = id
         self.title = title
         self.items = items
         self.continuation = continuation
+        self.isShorts = isShorts
+    }
+
+    /// Items from this row's continuation, shaped to what this row shows: a Shorts row vouches
+    /// for everything it pages in, and every other row drops the Shorts YouTube mixes into it.
+    ///
+    /// Applied where a page is appended rather than where it's fetched, because the row is the
+    /// only thing that knows which of the two it is — a continuation reply is a bare list of
+    /// cells with nothing naming the shelf it belongs to.
+    func admitting(_ items: [VideoItem]) -> [VideoItem] {
+        isShorts ? items.map { $0.asShort() } : items.filter { !$0.isShort }
     }
 }
 
