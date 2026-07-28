@@ -49,6 +49,19 @@ Each profile keeps its own OAuth tokens (Keychain) and its own watch progress, s
 history and resume positions are whatever that account sees. Signing a profile out deletes its
 watch progress along with its credentials.
 
+## Refreshing the feed
+
+The feed is checked for new videos in the background — when the app comes back to the
+foreground, and when you return to Home from a video or from Search — but only if what's on
+screen is more than 15 minutes old.
+
+A newer feed is never swapped in on its own. It waits behind a **_n_ new videos** button in the
+Home header, and only appears there if the fetch actually turned up videos that aren't already
+on screen. This is deliberate: shelf ids are regenerated on every load, so applying a feed
+rebuilds every row and resets scroll and focus. Doing that unprompted when someone comes back
+from a video would take away the card they meant to play next — the one to the right of what
+they just watched.
+
 ## Card menu — channels and subscriptions (prototype)
 
 Holding **Select** on a card in Home or Search opens a menu for the video's channel:
