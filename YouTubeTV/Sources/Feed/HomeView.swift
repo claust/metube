@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import TVServices
 
 /// The personalized Home feed: one horizontal, focusable row per YouTube shelf.
 /// Selection is delegated to the orchestrator via `onSelectVideo`.
@@ -249,6 +250,7 @@ struct HomeView: View {
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            updateTopShelf(from: page.sections)
             lastLoaded = .now
             // A pending page fetched before this one is now older than what's on screen.
             pendingPage = nil
@@ -352,6 +354,9 @@ struct HomeView: View {
         continuation = page.continuation
         pagesLoaded = 1
         lastLoaded = .now
+        // The feed the tiles were cut from has just been replaced, so cut them again — the
+        // whole point of this button is that Home now leads with different videos.
+        updateTopShelf(from: page.sections)
         // Same reason as the first load: every row id is new, so state keyed to the old ones
         // would point at rows that no longer exist.
         rowsLoadingMore = []
@@ -478,6 +483,24 @@ struct HomeView: View {
         }
         if update(&sections) { return true }
         return update(&extraSections)
+    }
+
+    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
+    /// above the app's icon on the tvOS home screen.
+    ///
+    /// Written here, on every successful first page, because this is the only point where the
+    /// active profile's feed is known to be current — the extension has no token of its own and
+    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
+    /// first one's items means a lead shelf holding a single video still fills both tiles.
+    private func updateTopShelf(from sections: [FeedSection]) {
+        let videos = sections.flatMap(\.items).prefix(TopShelfStore.itemCount).map {
+            TopShelfVideo(
+                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
+        }
+        TopShelfStore.save(Array(videos))
+        // tvOS caches what the provider last returned and would otherwise keep showing it until
+        // it next decides to ask. This is what makes the tiles follow a profile switch.
+        TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
     /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.

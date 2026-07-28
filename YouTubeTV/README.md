@@ -80,6 +80,72 @@ The InnerTube calls behind this (`subscription/subscribe`, `subscription/unsubsc
 `FEchannels`, channel `browse`) are implemented from SmartTube's request shapes and have **not**
 been verified against a live account yet.
 
+## Top Shelf
+
+When the app's icon is focused on the tvOS home screen's top row, the strip above it shows the
+first two videos of the signed-in account's feed. Selecting one opens the app straight into the
+player for that video.
+
+The tiles come from a snapshot, not a live fetch. `HomeView` writes the first two videos into
+the `group.dk.delectosoft.metube` app group each time the Home feed loads, and the extension in
+`TopShelf/` only decodes it — it has no OAuth token of its own, tvOS gives it a short window to
+answer in, and it can be asked for content before the app has run at all. So the tiles show the
+feed as of the last time the app was open, and the app calls
+`TVTopShelfContentProvider.topShelfContentDidChange()` after each load to push the new pair out.
+Signing the last profile out clears the snapshot rather than leaving one account's
+recommendations on a shared TV's home screen.
+
+A tile's action is a `metube://video?id=…` URL, built and parsed in one place
+(`TopShelfLink`) since it is the one thing the two processes must agree on exactly.
+`RootView.onOpenURL` turns it back into a `VideoItem` — titled from the same snapshot the tile
+was drawn from — and presents the player.
+
+The extension takes precedence over the static Top Shelf image in the asset catalog, which
+stays as the fallback: it is what shows while nobody is signed in, or before the feed has
+loaded once, because the provider answers `nil` rather than an empty shelf in those cases.
+
+Both targets sign against the same `Config/AppGroup.entitlements` — they need the identical
+group, or each would see its own empty store. Which builds get it is split by SDK, because App
+Groups is a **paid** Apple Developer Program capability:
+
+- **Simulator** always gets it. Nothing is provisioned there, so the Top Shelf works
+  unconditionally and this is where to exercise the feature.
+- **Device** only gets it when `YT_DEVICE_ENTITLEMENTS` names the file in
+  `Config/Secrets.xcconfig`. Left empty (the default, and what a free account needs) the app
+  still builds, installs and runs on an Apple TV — `TopShelfStore` no-ops without the group —
+  it just shows no tiles. Set it once your team is in the paid program:
+
+  ```
+  YT_DEVICE_ENTITLEMENTS = Config/AppGroup.entitlements
+  ```
+
+Either way a device build needs Xcode to register the extension's own App ID
+(`dk.delectosoft.metube.topshelf`) — an embedded extension is signed as its own bundle, so it
+gets its own profile. `xcodebuild -allowProvisioningUpdates` can only do that if Xcode's Apple
+account has a working developer-portal session; if it doesn't, it reports the rather misleading
+`No Accounts: Add a new account in Accounts settings` even though the account is signed in.
+
+Two things to know when testing on the simulator:
+
+- Build **without** `CODE_SIGNING_ALLOWED=NO`. That flag (which CI passes, since CI only
+  compiles) strips the entitlements, and the app then can't open the group container.
+- The first install of the extension registers it with HeadBoard but doesn't start its
+  controller — focusing the icon logs `extension controller … has not been started` and shows
+  nothing. Reboot the simulator (`xcrun simctl shutdown booted && xcrun simctl boot <udid>`)
+  once and the tiles appear. That the extension answered is visible in the log:
+
+  ```sh
+  xcrun simctl spawn booted log show --last 2m --predicate 'eventMessage CONTAINS "delectosoft.metube"' --style compact | grep loadTopShelf
+  ```
+
+The deep link can be exercised on its own, without touching the home screen:
+
+```sh
+xcrun simctl openurl booted "metube://video?id=<videoId>"
+```
+
+(tvOS shows an "Open in …?" confirmation for a URL opened this way; a real tile press doesn't.)
+
 ## Run on a real Apple TV
 
 One-time setup:
@@ -195,6 +261,7 @@ U+16CA points the wrong way and U+16CC is barely more than a tick.
 - `Sources/Search` — TV `search` + `SearchView` (reached from the icon in the Home header)
 - `Sources/UI` — the video card and layout metrics both screens share
 - `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController`
+- `TopShelf/` — the Top Shelf extension; shares only `Sources/Core/TopShelf.swift` with the app
 - `reference/` — distilled InnerTube notes and captured sample responses
 
 ## Scope / limitations

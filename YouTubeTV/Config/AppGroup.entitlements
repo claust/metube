@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Shared by the app and the Top Shelf extension: the app writes the feed snapshot into
+	     this group and the extension reads it back. One file rather than one per target,
+	     because both need exactly this and nothing else. See Sources/Core/TopShelf.swift. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.dk.delectosoft.metube</string>
+	</array>
+</dict>
+</plist>
