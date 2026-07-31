@@ -203,7 +203,7 @@ private struct CommentRow: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        Button(action: { action?() }) {
+        Button(action: select) {
             VStack(alignment: .leading, spacing: 10) {
                 byline
                 Text(comment.text)
@@ -221,6 +221,10 @@ private struct CommentRow: View {
         }
         .buttonStyle(CommentRowButtonStyle())
         .focused($isFocused)
+    }
+
+    private func select() {
+        action?()
     }
 
     private var byline: some View {
