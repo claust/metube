@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import UIKit
 
 /// Full-screen player. Resolves a stream URL for the given video and plays it
 /// with a native tvOS AVPlayerViewController (scrubbing + remote transport).
@@ -27,7 +28,7 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
 
             if let player {
-                PlayerContainer(player: player)
+                PlayerContainer(player: player, video: video)
                     .ignoresSafeArea()
             }
 
@@ -326,16 +327,44 @@ struct PlayerView: View {
 /// (transport bar, scrubbing, play/pause with the Siri Remote).
 private struct PlayerContainer: UIViewControllerRepresentable {
     let player: AVPlayer
+    let video: VideoItem
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
+        controller.transportBarCustomMenuItems = [commentsButton(for: controller)]
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         if controller.player !== player {
             controller.player = player
+        }
+    }
+
+    /// The "Comments" control in the transport bar's row of buttons, alongside the system's
+    /// subtitle and audio ones. Selecting it lays the comments panel over the playing video.
+    ///
+    /// Presented from the player controller rather than composed into the SwiftUI overlay
+    /// stack because focus is the whole game on tvOS: AVPlayerViewController owns focus while
+    /// it's on screen, and a presented controller is the supported way to take it — and Menu
+    /// then returns it to the player by plain dismissal.
+    private func commentsButton(for controller: AVPlayerViewController) -> UIMenuElement {
+        let videoId = video.id
+        return UIAction(
+            title: "Comments",
+            image: UIImage(systemName: "text.bubble")
+        ) { [weak controller] _ in
+            guard let controller, controller.presentedViewController == nil else { return }
+            let overlay = CommentsOverlayView(videoId: videoId) { [weak controller] in
+                controller?.dismiss(animated: true)
+            }
+            let host = UIHostingController(rootView: overlay)
+            // Over the video, not instead of it: playback continues, visible to the left of
+            // the panel and dimly through it.
+            host.modalPresentationStyle = .overFullScreen
+            host.view.backgroundColor = .clear
+            controller.present(host, animated: true)
         }
     }
 }
