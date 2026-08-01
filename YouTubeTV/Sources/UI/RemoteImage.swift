@@ -66,6 +66,10 @@ struct RemoteImage<Content: View>: View {
     }
 
     /// Asks the cache for the image, unless this view already has that exact one.
+    ///
+    /// Stated rather than inferred: the closure `.task` takes is `@Sendable` and carries no
+    /// isolation of its own, and everything below here writes view state.
+    @MainActor
     private func load() async {
         guard let url else {
             phase = .loading
