@@ -118,8 +118,8 @@ struct ChannelView: View {
     @ViewBuilder
     private var banner: some View {
         if let bannerURL, !isLoading, errorMessage == nil {
-            AsyncImage(url: bannerURL) { phase in
-                if case .success(let image) = phase {
+            RemoteImage(url: bannerURL) { phase in
+                if let image = phase.image {
                     image
                         .resizable()
                         .scaledToFill()
@@ -156,8 +156,8 @@ struct ChannelView: View {
     @ViewBuilder
     private var avatar: some View {
         if let avatarURL {
-            AsyncImage(url: avatarURL) { phase in
-                if case .success(let image) = phase {
+            RemoteImage(url: avatarURL) { phase in
+                if let image = phase.image {
                     image.resizable().scaledToFill()
                 } else {
                     Color(white: 0.3)

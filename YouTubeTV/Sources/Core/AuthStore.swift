@@ -120,27 +120,45 @@ final class AuthStore: ObservableObject {
     // MARK: - Tokens
 
     /// Attempt to obtain a fresh access token for a profile using its stored refresh token.
-    /// Returns true on success. On failure the profile is dropped (see `invalidate`) so the UI
-    /// moves on rather than getting stuck in a broken "signed in" state.
+    /// Returns true on success.
+    ///
+    /// The profile is dropped (see `invalidate`) only when the *server* refuses the refresh
+    /// token, which is the one answer that means the credential is genuinely dead. Anything else
+    /// — the network being down, the request being torn down when the app goes to the background
+    /// — leaves the profile exactly as it was, for the next request to try again with. Signing
+    /// out on those was silent data loss: the refresh token is deleted on the way out, so a
+    /// moment's connectivity trouble cost the user their session and their place in the app.
     @discardableResult
     func refresh(profileID: String? = nil) async -> Bool {
         guard let profileID = profileID ?? activeProfileID else { return false }
-        guard await renewTokens(for: profileID) else {
-            invalidate(profileID)
+        do {
+            try await renewTokens(for: profileID)
+            return true
+        } catch {
+            if Self.isRefusal(error) { invalidate(profileID) }
             return false
         }
-        return true
     }
+
+    /// Whether an error from the token endpoint is the account itself saying no — a revoked or
+    /// expired refresh token, consent withdrawn — rather than something that might work later.
+    private static func isRefusal(_ error: Error) -> Bool {
+        if case DeviceAuthError.oauth = error { return true }
+        return error is MissingRefreshToken
+    }
+
+    /// A profile with nothing to refresh *with* can never renew, which is as final as being
+    /// refused — there is no later attempt that would go any better.
+    private struct MissingRefreshToken: Error {}
 
     /// The token exchange on its own, leaving a profile that fails it in place. Used where the
     /// refresh is incidental — filling in an avatar is not worth signing someone out over, and
     /// a transient failure there would take the profile with it.
-    private func renewTokens(for profileID: String) async -> Bool {
-        guard let refreshToken = refreshTokens[profileID] else { return false }
-        guard let tokens = try? await DeviceAuthService().refreshTokens(refreshToken: refreshToken)
-        else { return false }
-        store(tokens: tokens, for: profileID)
-        return true
+    private func renewTokens(for profileID: String) async throws {
+        guard let refreshToken = refreshTokens[profileID] else { throw MissingRefreshToken() }
+        store(
+            tokens: try await DeviceAuthService().refreshTokens(refreshToken: refreshToken),
+            for: profileID)
     }
 
     private func store(tokens: DeviceAuthService.Tokens, for profileID: String) {
@@ -177,7 +195,9 @@ final class AuthStore: ObservableObject {
             var info = try? await AccountService().loadAccount(accessToken: token)
             // An expired access token is the likeliest reason this failed, and it would fail
             // again on every launch until something else happened to refresh it.
-            if info == nil, await renewTokens(for: profileID), let retryToken = accessTokens[profileID] {
+            if info == nil, (try? await renewTokens(for: profileID)) != nil,
+                let retryToken = accessTokens[profileID]
+            {
                 info = try? await AccountService().loadAccount(accessToken: retryToken)
             }
             // Re-read the profile: the refresh above, or a sign-out while this was in flight,

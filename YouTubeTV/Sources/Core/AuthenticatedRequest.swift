@@ -2,9 +2,11 @@ import Foundation
 
 extension AuthStore {
     /// Runs an InnerTube request with the current access token, refreshing it once on a
-    /// 401/403 and retrying. Returns `nil` when the work was cancelled or the refresh failed
-    /// (which signs the user out — `refresh()` clears the tokens and RootView returns to Login),
-    /// so callers can tell "nothing to show, and nothing to report" from a real error.
+    /// 401/403 and retrying. Returns `nil` when the work was cancelled or the refresh failed, so
+    /// callers can tell "nothing to show, and nothing to report" from a real error. A refresh
+    /// the account actually refused signs the user out on its way through — `refresh()` clears
+    /// the tokens and RootView returns to Login — but one that merely didn't get through leaves
+    /// the session alone for the next request to retry.
     func authorized<T>(_ request: (String) async throws -> T) async throws -> T? {
         guard let token = accessToken else { return nil }
         do {
