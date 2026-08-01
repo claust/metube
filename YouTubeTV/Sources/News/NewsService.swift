@@ -82,7 +82,13 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
 
     /// RSS dates are RFC 822 ("Sat, 01 Aug 2026 05:42:31 GMT"). Fixed locale because the format
     /// has English month and day names regardless of where the device is.
-    private static let dateFormatter: DateFormatter = {
+    ///
+    /// One per parser rather than one shared static: sources are fetched and parsed
+    /// concurrently, and a formatter owned by the parse it belongs to is trivially confined to
+    /// that task. `DateFormatter` is documented as thread-safe for parsing, so this isn't
+    /// fixing a live race — it costs one object per fetch and removes the shared mutable state
+    /// from the question entirely.
+    private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
@@ -166,7 +172,7 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
             summary: fields.description,
             link: URL(string: fields.link),
             imageURL: URL(string: fields.imageURL),
-            publishedAt: Self.dateFormatter.date(from: fields.pubDate)
+            publishedAt: dateFormatter.date(from: fields.pubDate)
         )
     }
 }

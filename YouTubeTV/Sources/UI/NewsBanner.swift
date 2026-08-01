@@ -163,10 +163,16 @@ struct NewsBanner: View {
         .onExitCommand {
             isCollapsing = true
             onDismiss()
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(400))
-                isCollapsing = false
-            }
+        }
+        // Ends the collapse window. Held by the view rather than by a detached `Task`, so it is
+        // cancelled if the banner goes away mid-collapse and restarted rather than duplicated if
+        // Menu is pressed again — two overlapping timers could otherwise clear `isCollapsing`
+        // out of order and make the strip focusable again while a collapse was still in flight.
+        .task(id: isCollapsing) {
+            guard isCollapsing else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            isCollapsing = false
         }
         .task {
             // One turn of the run loop after the feed has laid out is enough for the focus
