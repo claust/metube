@@ -28,6 +28,11 @@ struct VideoCard: View {
     /// go to channel, subscribe or unsubscribe. Cards that aren't given one just play.
     var onLongPress: (() -> Void)?
     let action: () -> Void
+    /// A focus handle owned by the screen showing the card, for the rare case where something
+    /// else on that screen needs to put focus *here*. Home passes one to its first card so the
+    /// news panel has somewhere definite to hand focus back to when it is dismissed; every
+    /// other card is left to the focus engine.
+    var externalFocus: FocusState<Bool>.Binding?
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
@@ -115,6 +120,7 @@ struct VideoCard: View {
         // tests, which identify a card by its label.
         .accessibilityLabel(accessibilityText)
         .focusEffectDisabled()
+        .modifier(ExternalFocus(binding: externalFocus))
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.08 : 1.0)
         .shadow(color: .black.opacity(isFocused ? 0.6 : 0), radius: 20)
@@ -492,5 +498,21 @@ private struct BareButtonStyle: ButtonStyle {
             .onChange(of: configuration.isPressed) { _, isPressed in
                 onPressingChanged?(isPressed)
             }
+    }
+}
+
+/// Attaches a caller-owned focus handle to a card, when it was given one.
+///
+/// A conditional `.focused()` can't be written inline — the modifier needs a binding, not an
+/// optional — so the choice is made here instead.
+private struct ExternalFocus: ViewModifier {
+    let binding: FocusState<Bool>.Binding?
+
+    func body(content: Content) -> some View {
+        if let binding {
+            content.focused(binding)
+        } else {
+            content
+        }
     }
 }

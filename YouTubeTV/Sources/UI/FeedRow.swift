@@ -13,6 +13,9 @@ struct FeedRow: View {
     /// Fired as one of the last cards comes into view, so the row can grow before focus
     /// reaches its end.
     var onNeedMoreItems: () -> Void = {}
+    /// Passed on to this row's first card — see `VideoCard.externalFocus`. Only the row a
+    /// screen wants to be able to focus is given one.
+    var firstCardFocus: FocusState<Bool>.Binding?
 
     /// Start fetching more videos for a row once a card this close to its end comes into view.
     static let itemPrefetchDistance = 4
@@ -34,7 +37,9 @@ struct FeedRow: View {
                         VideoCard(
                             item: item,
                             onLongPress: { onLongPressVideo(item) },
-                            action: { onSelectVideo(item) }
+                            action: { onSelectVideo(item) },
+                            externalFocus: item.id == section.items.first?.id
+                                ? firstCardFocus : nil
                         )
                         // In a LazyHStack this runs as the card scrolls in, which is the
                         // point: paging starts while cards are still to the right of it.
