@@ -77,7 +77,7 @@ targets:
         # account — `TopShelfStore` no-ops without the group — it just shows no tiles.
         CODE_SIGN_ENTITLEMENTS[sdk=appletvsimulator*]: Config/AppGroup.entitlements
         CODE_SIGN_ENTITLEMENTS[sdk=appletvos*]: $(YT_DEVICE_ENTITLEMENTS)
-        INFOPLIST_KEY_CFBundleDisplayName: YouTube TV
+        INFOPLIST_KEY_CFBundleDisplayName: Fjernsyn
         # Device builds use automatic signing; DEVELOPMENT_TEAM comes from
         # Config/Secrets.xcconfig (gitignored) so each developer supplies their own.
         # Simulator builds ignore both.
@@ -105,7 +105,7 @@ targets:
     info:
       path: TopShelf/Info.plist
       properties:
-        CFBundleDisplayName: YouTube TV Top Shelf
+        CFBundleDisplayName: Fjernsyn Top Shelf
         # An embedded extension's version has to match its host app's, or the build warns
         # and App Store validation rejects the bundle.
         CFBundleShortVersionString: $(MARKETING_VERSION)
