@@ -12,9 +12,10 @@ struct FeedService {
 
     /// Loads the first page of any browsable feed on the TVHTML5 client.
     ///
-    /// Supplementary feeds get their first row retitled to name the feed. Subscriptions opens
-    /// with a "Most relevant" shelf and History with an untitled one — neither says which feed
-    /// it came from, which matters once the rows sit below Home.
+    /// Supplementary feeds get their untitled rows folded into the titled one above them, and
+    /// that row retitled to name the feed. Subscriptions opens with a "Most relevant" shelf and
+    /// History with an untitled one — neither says which feed it came from, which matters once
+    /// the rows sit beside Home's.
     func loadFeed(_ feed: Feed, accessToken: String) async throws -> FeedPage {
         let json = try await InnerTubeClient.post(
             endpoint: "browse",
@@ -24,17 +25,68 @@ struct FeedService {
         )
         var result = page(from: json, label: feed.browseId)
 
+        guard feed != .home else { return result }
+
+        var sections = collapsingUntitledRows(in: result.sections)
+
         // Skips a leading Shorts row: it says what it holds, and naming it after the feed would
         // both lose that and leave the feed's own heading on the wrong row.
-        if feed != .home, let index = result.sections.firstIndex(where: { !$0.isShorts }) {
-            var sections = result.sections
+        if let index = sections.firstIndex(where: { !$0.isShorts }) {
             let first = sections[index]
             sections[index] = FeedSection(
                 id: first.id, title: feed.title, items: first.items,
                 continuation: first.continuation)
-            result = FeedPage(
-                sections: sections, continuation: result.continuation,
-                channelAvatars: result.channelAvatars)
+        }
+
+        result = FeedPage(
+            sections: sections, continuation: result.continuation,
+            channelAvatars: result.channelAvatars)
+        return result
+    }
+
+    /// Folds each untitled row into the nearest titled row above it.
+    ///
+    /// A supplementary feed isn't really a list of shelves: Subscriptions is one grid of uploads,
+    /// which TVHTML5 hands back pre-chunked into rows of three, and only the first of them
+    /// carries a header. Drawn as they arrive that's one proper row trailed by a run of
+    /// three-video stubs with no heading — so they're put back together into the row they were
+    /// cut from.
+    ///
+    /// Untitled rows are matched to the nearest *titled* row above rather than simply to the one
+    /// before them: the Shorts row sits in the middle of the run (its position varies between
+    /// responses), and the chunks below it belong to the grid, not to Shorts. A Shorts row is
+    /// never a target and never folded away — it's a genuine shelf that happens to be titled.
+    private func collapsingUntitledRows(in sections: [FeedSection]) -> [FeedSection] {
+        var result: [FeedSection] = []
+        // Where in `result` the untitled rows are currently being folded, and what it already
+        // holds — a chunk can repeat a video from the row above it.
+        var target: Int?
+        var seen: Set<String> = []
+
+        for section in sections {
+            guard !section.isShorts else {
+                result.append(section)
+                continue
+            }
+            if !section.title.isEmpty {
+                result.append(section)
+                target = result.index(before: result.endIndex)
+                seen = Set(section.items.map(\.id))
+                continue
+            }
+            guard let index = target else {
+                // An untitled row with nothing above it to join — History's single row is this.
+                result.append(section)
+                continue
+            }
+            let fresh = section.items.filter { seen.insert($0.id).inserted }
+            guard !fresh.isEmpty else { continue }
+            let host = result[index]
+            result[index] = FeedSection(
+                id: host.id, title: host.title, items: host.items + fresh,
+                // The chunks are the rest of the grid, so a token on the last of them is what
+                // pages it — and it outranks the host's, which stops at its own chunk.
+                continuation: section.continuation ?? host.continuation)
         }
 
         return result
@@ -241,9 +293,10 @@ struct FeedService {
             emitted.formUnion(items.map(\.id))
 
             // The shelf's own kind comes first: a reel shelf is a Shorts row whatever its cells
-            // happen to look like. A shelf of nothing but Shorts is one too — which is how a
-            // Shorts row laid out as an ordinary shelf still reads as one.
-            let isShorts = shelf.isReel || items.allSatisfy(\.isShort)
+            // happen to look like, and so is one flying the Shorts glyph in its header. A shelf
+            // of nothing but Shorts is one too — which is how a Shorts row laid out as an
+            // ordinary shelf still reads as one.
+            let isShorts = shelf.isReel || hasShortsIcon(shelf.renderer) || items.allSatisfy(\.isShort)
             let title = shelfTitle(shelf.renderer) ?? ""
             let continuation = rowContinuation(in: shelf.renderer)
 
@@ -398,6 +451,24 @@ struct FeedService {
             if let subscribed = button["subscribed"] as? Bool { return subscribed }
         }
         return nil
+    }
+
+    /// Whether the shelf flies the Shorts glyph — `YOUTUBE_SHORTS_FILL_24` on the Subscriptions
+    /// Shorts row (verified 2026-08-01). Matched on containing `SHORTS` rather than on the exact
+    /// name, which carries a size and a fill style that are presentation, not identity.
+    ///
+    /// This is the only dependable mark on that row. Its cells claim nothing: not one of the
+    /// fifteen carries a reel endpoint, a Shorts content type, a Shorts time-status badge or
+    /// portrait artwork, so `isShort` says no to every one of them and the shelf reads as an
+    /// ordinary row of videos. The icon is what YouTube draws the row's own heading with, and
+    /// unlike the title it's the same string in every language.
+    private func hasShortsIcon(_ shelf: [String: Any]) -> Bool {
+        let paths = [
+            "icon/iconType",
+            "headerRenderer/shelfHeaderRenderer/icon/iconType",
+            "header/shelfHeaderRenderer/icon/iconType",
+        ]
+        return paths.contains { (shelf.value(at: $0) as? String)?.contains("SHORTS") == true }
     }
 
     /// Shelf headings live under a few different renderers depending on the row type.
