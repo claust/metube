@@ -199,6 +199,21 @@ struct NewsBanner: View {
                 runStart = Date()
             }
         }
+        // A refreshed feed is a different set of cells. Without clearing the old measurements
+        // `cellWidths` keeps ids that are no longer in `items`, so its count never matches again
+        // and `laneWidth` stays nil for good — which stops the marquee and disables stepping.
+        .onChange(of: items.map(\.id)) { _, _ in
+            cellWidths = [:]
+            base = 0
+            runStart = isActive ? nil : Date()
+        }
+        // Start the clock the moment the cells have been measured, not before. `distance` is
+        // elapsed time times speed, so a run that began while the lap length was still unknown
+        // would resolve into a large offset the instant it became known, and the strip would
+        // open mid-jump.
+        .onChange(of: laneWidth == nil) { _, unmeasured in
+            if !unmeasured, !isActive { runStart = Date() }
+        }
         .accessibilityLabel("News headlines")
         .accessibilityValue(focusedItem?.title ?? "")
     }
@@ -568,8 +583,12 @@ struct NewsBanner: View {
     }
 
     /// How far the strip has travelled at this instant — unbounded, so callers wrap it.
+    ///
+    /// Pinned to `base` until the cells have been measured: there is no lap to travel round yet,
+    /// and counting time against one that doesn't exist is what would produce the jump the
+    /// `laneWidth` observer above avoids.
     private func distance(at date: Date) -> CGFloat {
-        guard let runStart else { return base }
+        guard let runStart, laneWidth != nil else { return base }
         return base + CGFloat(date.timeIntervalSince(runStart)) * Self.speed
     }
 
@@ -591,8 +610,10 @@ struct NewsBanner: View {
         return starts
     }
 
-    /// The headline currently at the left edge of the strip — the one the chip marks and the
-    /// one select opens. `nil` before the cells have been measured.
+    /// The headline currently at the left edge of the strip — the one the chip marks and the one
+    /// the panel shows. Before the cells have been measured there is no such thing as a left
+    /// edge, so this answers with the first headline rather than nothing: the panel opens on a
+    /// real story either way, and the chip lands on it once the widths arrive.
     private var focusedItem: NewsItem? {
         guard laneWidth != nil else { return items.first }
         let position = wrapped(distance(at: Date()))

@@ -313,9 +313,14 @@ struct HomeView: View {
             return
         }
         let items = await NewsService().headlines()
+        // Nothing came back — every source failed, or the feed is empty. Deliberately *not*
+        // counted as loaded, so the next poll tries again in five minutes rather than sitting on
+        // the stale headlines for the full fifteen. The headlines already on screen stay there
+        // in the meantime.
         guard !items.isEmpty else { return }
-        // Counted as loaded either way — the fetch happened, and repeating it every poll while
-        // someone reads a long article would be the same answer at the same cost.
+        // A fetch that returned something counts as loaded whether or not it was applied on the
+        // spot: refetching every poll while someone reads a long article would cost the same
+        // request for the same answer.
         headlinesLoaded = Date()
         if isNewsActive {
             pendingHeadlines = items
