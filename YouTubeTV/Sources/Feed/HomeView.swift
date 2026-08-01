@@ -89,9 +89,10 @@ struct HomeView: View {
     /// task and starting a fresh one.
     private var isPollingHeadlines: Bool { scenePhase == .active && isFrontmost }
 
-    /// Rows from the supplementary feeds (Subscriptions, History). Kept separate from `sections`
-    /// so they stay pinned below Home as it pages, rather than being pushed around by it.
-    @State private var extraSections: [FeedSection] = []
+    /// Rows from the supplementary feeds, by feed. Kept separate from `sections` — and from each
+    /// other — so each one lands in its own slot in the layout and stays there as Home pages,
+    /// rather than being pushed around by it.
+    @State private var feedSections: [Feed: [FeedSection]] = [:]
 
     /// Token for the next page of shelves; `nil` once the feed is exhausted or paging has stopped.
     @State private var continuation: String?
@@ -268,40 +269,31 @@ struct HomeView: View {
                 // first row, which sits directly beneath it.
                 .focusSection()
 
-                if sections.isEmpty && extraSections.isEmpty {
+                if sections.isEmpty && supplementarySections.isEmpty {
                     Text("No recommendations found.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, Metrics.horizontalInset)
                         .padding(.top, 40)
                 } else {
-                    ForEach(sections) { section in
-                        FeedRow(
-                            section: section,
-                            onSelectVideo: onSelectVideo,
-                            onLongPressVideo: { menuItem = $0 },
-                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
-                            firstCardFocus: section.id == sections.first?.id
-                                ? $isFirstCardFocused : nil
-                        )
-                        .onAppear { prefetchIfNeeded(from: section) }
-                    }
+                    ForEach(leadSections) { homeRow($0) }
 
-                    // Sits between Home and the supplementary feeds, where the next page lands.
+                    // Directly under the recommendations, which is the whole point of splitting
+                    // Home in two: what the user actually subscribed to shouldn't sit below
+                    // however many shelves YouTube chose to send, let alone below eight pages
+                    // of them.
+                    ForEach(feedSections[.subscriptions] ?? []) { supplementaryRow($0) }
+
+                    ForEach(trailingSections) { homeRow($0) }
+
+                    // Sits at the end of Home, where the next page lands.
                     if isLoadingMore {
                         ProgressView()
                             .tint(.white)
                             .padding(.horizontal, Metrics.horizontalInset)
                     }
 
-                    ForEach(extraSections) { section in
-                        FeedRow(
-                            section: section,
-                            onSelectVideo: onSelectVideo,
-                            onLongPressVideo: { menuItem = $0 },
-                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
-                        )
-                    }
+                    ForEach(feedSections[.history] ?? []) { supplementaryRow($0) }
                 }
             }
             .padding(.vertical, 60)
@@ -414,16 +406,14 @@ struct HomeView: View {
         }
     }
 
-    /// Fetches Subscriptions and History concurrently and appends them below Home.
+    /// Fetches Subscriptions and History concurrently and fills their slots around Home.
     /// Each feed degrades on its own: one failing or being slow leaves the others (and Home)
     /// unaffected, because rows are published as each feed arrives rather than in one batch.
     @MainActor
     private func loadSupplementaryFeeds(accessToken: String) async {
-        let feeds = Feed.allCases.filter { $0 != .home }
-
         var loaded: [Feed: [FeedSection]] = [:]
         await withTaskGroup(of: (Feed, FeedPage?).self) { group in
-            for feed in feeds {
+            for feed in Self.supplementaryFeeds {
                 group.addTask {
                     (feed, try? await FeedService().loadFeed(feed, accessToken: accessToken))
                 }
@@ -434,9 +424,10 @@ struct HomeView: View {
                 // Subscriptions is the one response that pictures channels; the cards read the
                 // pictures back by name, so they light up as soon as this lands.
                 channelAvatars.merge(page?.channelAvatars ?? [:])
-                // Rebuild from `feeds` rather than appending, so rows land in declared order
-                // however the requests finish. A feed still pending contributes nothing yet.
-                extraSections = feeds.flatMap { loaded[$0] ?? [] }
+                // Publish what has arrived. Which feed a row belongs to now decides where it is
+                // drawn, so the order the requests finish in doesn't affect the layout — a feed
+                // still pending just leaves its slot empty for now.
+                feedSections = loaded
             }
         }
     }
@@ -472,7 +463,7 @@ struct HomeView: View {
             }) ?? nil
         else { return }
 
-        let shown = Set((sections + extraSections).flatMap { $0.items.map(\.id) })
+        let shown = Set((sections + supplementarySections).flatMap { $0.items.map(\.id) })
         // Counted over a set: Home repeats the same video across shelves, and "3 new videos"
         // should mean three of them.
         let fresh = Set(page.sections.flatMap { $0.items.map(\.id) }).subtracting(shown)
@@ -605,7 +596,7 @@ struct HomeView: View {
     }
 
     private func section(withID id: String) -> FeedSection? {
-        sections.first { $0.id == id } ?? extraSections.first { $0.id == id }
+        sections.first { $0.id == id } ?? supplementarySections.first { $0.id == id }
     }
 
     /// Adds videos to the row with this id, in whichever list holds it. Returns `false` when
@@ -632,7 +623,13 @@ struct HomeView: View {
             return true
         }
         if update(&sections) { return true }
-        return update(&extraSections)
+        for feed in Self.supplementaryFeeds {
+            guard var rows = feedSections[feed] else { continue }
+            guard update(&rows) else { continue }
+            feedSections[feed] = rows
+            return true
+        }
+        return false
     }
 
     /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
@@ -664,4 +661,63 @@ struct HomeView: View {
         }
     }
 
+}
+
+// MARK: - Row layout
+
+/// How the fetched feeds are laid out down the screen.
+///
+/// Home arrives as one ordered list of shelves but isn't drawn as one: the subscriptions row is
+/// dealt into it, directly under the recommendations. So the screen is four slots — Home's lead,
+/// Subscriptions, the rest of Home, History — and these are what carve them out.
+extension HomeView {
+
+    /// The feeds fetched alongside Home.
+    static var supplementaryFeeds: [Feed] { Feed.allCases.filter { $0 != .home } }
+
+    /// Every supplementary row, in feed order. For the checks that care about the feed as a
+    /// whole rather than where its rows are drawn.
+    var supplementarySections: [FeedSection] {
+        Self.supplementaryFeeds.flatMap { feedSections[$0] ?? [] }
+    }
+
+    /// Home's opening rows: everything up to and including the first row that isn't Shorts.
+    ///
+    /// That row is YouTube's recommendations. Nothing in the response marks it as such — a shelf
+    /// carries only a title, which is localized and not ours — so it's identified by position,
+    /// which is the one thing the response does state. The Shorts guard is the same one
+    /// `FeedService.loadFeed` uses, and covers a response that opens with a Shorts row.
+    var leadSections: ArraySlice<FeedSection> {
+        guard let index = sections.firstIndex(where: { !$0.isShorts }) else { return sections[...] }
+        return sections[...index]
+    }
+
+    /// The rest of Home, drawn below the subscriptions row. This is what paging grows.
+    var trailingSections: ArraySlice<FeedSection> {
+        sections[leadSections.endIndex...]
+    }
+
+    /// One of Home's rows. Home is drawn in two stretches with the subscriptions row between
+    /// them, so both stretches build their rows through here.
+    func homeRow(_ section: FeedSection) -> some View {
+        FeedRow(
+            section: section,
+            onSelectVideo: onSelectVideo,
+            onLongPressVideo: { menuItem = $0 },
+            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
+            firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil
+        )
+        .onAppear { prefetchIfNeeded(from: section) }
+    }
+
+    /// One row of a supplementary feed. Unlike Home's, these don't page the feed itself —
+    /// only the row — so they carry no `onAppear`.
+    func supplementaryRow(_ section: FeedSection) -> some View {
+        FeedRow(
+            section: section,
+            onSelectVideo: onSelectVideo,
+            onLongPressVideo: { menuItem = $0 },
+            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
+        )
+    }
 }
