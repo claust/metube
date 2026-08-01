@@ -65,6 +65,12 @@ final class WatchProgressSync: ObservableObject {
     func activate(profile: Profile?, accessToken: String?) {
         flushTask?.cancel()
         runTask?.cancel()
+        // Dropped along with the rest: a sign-in still in flight belongs to the profile being
+        // switched away from, and `authenticate` waits on whatever is here. Left in place, the
+        // incoming profile would be handed the outgoing one's user id and go on to read and
+        // write that account's rows.
+        signInTask?.cancel()
+        signInTask = nil
 
         guard let profile, let accountKey = profile.accountKey, let accessToken else {
             self.profile = nil
@@ -130,6 +136,13 @@ final class WatchProgressSync: ObservableObject {
 
     private static func sessionKey(profileID: String) -> String { "appwrite.session.\(profileID)" }
 
+    /// Forgets a profile's session — for `AuthStore`, on sign-out. Static because the sign-out
+    /// path has no reason to know about syncing, and a stale cookie is worth clearing whether
+    /// or not this profile is the one currently loaded.
+    static func discardSession(for profileID: String) {
+        KeychainStore.delete(sessionKey(profileID: profileID))
+    }
+
     /// Signs in if there is no session yet. Returns the session's user id, which every row is
     /// keyed and permissioned by.
     ///
@@ -139,7 +152,11 @@ final class WatchProgressSync: ObservableObject {
     private func authenticate() async -> String? {
         guard let profile, let client else { return nil }
         if let session = client.session { return session.userId }
-        if let signInTask { return await signInTask.value }
+        if let signInTask {
+            let userId = await signInTask.value
+            guard self.profile?.id == profile.id else { return nil }
+            return userId
+        }
 
         let task = Task { [weak self] () -> String? in
             do {
@@ -154,7 +171,11 @@ final class WatchProgressSync: ObservableObject {
         }
         signInTask = task
         let userId = await task.value
-        signInTask = nil
+        // Only if it is still ours: a profile switch during the sign-in has already replaced
+        // this, and clearing it blind would strand the incoming profile's own attempt.
+        if signInTask == task { signInTask = nil }
+        // And the answer is only usable if it is still the same profile asking.
+        guard self.profile?.id == profile.id else { return nil }
         return userId
     }
 
