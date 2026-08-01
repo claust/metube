@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The rolling news ticker across the top of Home: a yellow strip of headlines drifting
 /// right-to-left, with the source badge pinned at the left so a half-scrolled headline is still
@@ -30,6 +31,12 @@ struct NewsBanner: View {
     /// Menu, pressed anywhere in the strip or the article. The screen showing the banner owns
     /// where focus goes next — it is the only thing that knows what the feed's first card is.
     var onDismiss: () -> Void = {}
+    /// Whether the strip may take focus at all. False while the screen is rebuilding underneath
+    /// it and focus is in mid-air: the banner sits above everything, so it is what the focus
+    /// engine reaches for when the view that had focus disappears — and arriving here doesn't
+    /// just move focus, it opens a story nobody asked to read. See `acceptsFocus`, which is the
+    /// same idea for the first moment on screen.
+    var canTakeFocus: Bool = true
 
     /// How fast the strip travels, in points per second. Slow enough to finish reading a
     /// headline that is already halfway across, brisk enough that the next one is not a wait.
@@ -149,7 +156,7 @@ struct NewsBanner: View {
         // drawer opening under the strip, and the rows slide back the moment focus leaves.
         VStack(spacing: 22) {
             strip
-                .focusable(acceptsFocus && !isCollapsing)
+                .focusable(acceptsFocus && canTakeFocus && !isCollapsing)
                 .focused($focus, equals: .strip)
                 .onMoveCommand(perform: stepStory)
             if isActive, !isCollapsing, let item = focusedItem {
@@ -158,6 +165,12 @@ struct NewsBanner: View {
             }
         }
         .focusEffectDisabled()
+        // Swipes across the remote's touch surface, which the directional handlers above never
+        // see — see `SwipeCatcher`. Live for exactly as long as the banner holds focus, which is
+        // the only time a horizontal swipe means "another story".
+        .background {
+            SwipeCatcher(isEnabled: isActive && !isCollapsing, onSwipe: stepStory)
+        }
         // Menu, from the strip or from halfway down a story. Reading is a detour, and this is
         // the way back off it without walking to the end of the article first.
         .onExitCommand {
@@ -684,6 +697,115 @@ struct NewsBanner: View {
             base = destination
         } else {
             withAnimation(.smooth(duration: 0.3)) { base = destination }
+        }
+    }
+}
+
+/// Turns a left or right swipe across the remote's touch surface into the same step between
+/// stories that clicking the edge of the pad makes.
+///
+/// A click arrives as a move command, which `onMoveCommand` picks up. A swipe does not: tvOS
+/// hands it to the focus engine as a request to move focus, and the strip is a single focusable
+/// inside its own focus section — so there is nowhere for focus to go and the gesture is dropped
+/// without anything being told about it. Catching it in UIKit is what makes the two ways of
+/// pressing left and right on a Siri Remote do the same thing.
+///
+/// The recognizers go on the window rather than on this view. Remote touches are indirect: they
+/// are delivered to whatever holds focus and travel up its responder chain, so only a recognizer
+/// on an ancestor of the focused view ever sees them, and this view is a backdrop beside the
+/// strip rather than above it. Being window-wide is safe because it is temporary — the
+/// recognizers exist only while the banner holds focus, and come straight off it again, so a
+/// swipe anywhere else in the app is never routed through here.
+private struct SwipeCatcher: UIViewRepresentable {
+    /// Whether the swipes should be caught at all — true only while the banner has focus.
+    var isEnabled: Bool
+    var onSwipe: (MoveCommandDirection) -> Void
+
+    func makeUIView(context: Context) -> HostView {
+        let view = HostView()
+        // Nothing to hit: the recognizers live on the window, and an interactive backdrop under
+        // the strip would only get in the focus engine's way.
+        view.isUserInteractionEnabled = false
+        view.onWindowChange = { [coordinator = context.coordinator] window in
+            coordinator.attach(to: window)
+        }
+        return view
+    }
+
+    func updateUIView(_ view: HostView, context: Context) {
+        context.coordinator.onSwipe = onSwipe
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.attach(to: view.window)
+    }
+
+    static func dismantleUIView(_ view: HostView, coordinator: Coordinator) {
+        coordinator.attach(to: nil)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Reports when it joins or leaves a window, which is the moment the recognizers can be put
+    /// somewhere the remote's touches actually reach.
+    final class HostView: UIView {
+        var onWindowChange: (UIWindow?) -> Void = { _ in }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onWindowChange(window)
+        }
+    }
+
+    /// Owns the two recognizers and the window they are currently on.
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onSwipe: (MoveCommandDirection) -> Void = { _ in }
+        /// Set from `updateUIView`, which then calls `attach` — so this is read there rather
+        /// than acted on here.
+        var isEnabled = false
+
+        private lazy var recognizers: [UISwipeGestureRecognizer] = [
+            recognizer(for: .left), recognizer(for: .right),
+        ]
+        /// The window the recognizers are on, and `nil` when they are on none.
+        private weak var attached: UIWindow?
+
+        /// Moves the recognizers onto `window`, or takes them off everything when the banner
+        /// doesn't have focus. Idempotent: SwiftUI re-runs `updateUIView` for every state change
+        /// in the banner, and the ticker changes state constantly.
+        func attach(to window: UIWindow?) {
+            let target = isEnabled ? window : nil
+            guard target !== attached else { return }
+            for recognizer in recognizers {
+                recognizer.view?.removeGestureRecognizer(recognizer)
+                target?.addGestureRecognizer(recognizer)
+            }
+            attached = target
+        }
+
+        private func recognizer(for direction: UISwipeGestureRecognizer.Direction)
+            -> UISwipeGestureRecognizer
+        {
+            let recognizer = UISwipeGestureRecognizer(target: self, action: #selector(handle))
+            recognizer.direction = direction
+            recognizer.delegate = self
+            return recognizer
+        }
+
+        @objc private func handle(_ recognizer: UISwipeGestureRecognizer) {
+            guard isEnabled else { return }
+            switch recognizer.direction {
+            case .left: onSwipe(.left)
+            case .right: onSwipe(.right)
+            default: break
+            }
+        }
+
+        /// The system's own pan recognizers are already on this window, driving the focus engine.
+        /// Without this they would claim the touch first and the swipe would never be reported.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }

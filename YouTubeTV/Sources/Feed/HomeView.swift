@@ -69,6 +69,19 @@ struct HomeView: View {
     /// Drives the handoff below.
     @State private var isHandingBackFocus = false
 
+    /// True between the "new videos" button being pressed and focus arriving back on the feed.
+    ///
+    /// Pressing that button destroys the very view that holds focus — the button removes itself
+    /// — while every shelf underneath is rebuilt from a new page. Left alone the focus engine
+    /// answers that by climbing to the news strip, which opens the reading panel over an article
+    /// the user was not reading. So the banner is held unfocusable for the moment it takes, and
+    /// focus is put where the press was actually heading: the first card of the refreshed feed.
+    @State private var isApplyingRefresh = false
+
+    /// Focus scope for the header row, so the "new videos" button can claim the focus arriving
+    /// from the row beneath it — see the `prefersDefaultFocus` below.
+    @Namespace private var headerFocus
+
     /// Guards against two headline fetches running at once. The poll below and the return from
     /// the background can both come due in the same moment, and `headlinesLoaded` is only
     /// written when a fetch lands — so without this they would both pass the staleness check and
@@ -179,6 +192,17 @@ struct HomeView: View {
             if !isNewsActive { isFirstCardFocused = true }
             isHandingBackFocus = false
         }
+        // Same handoff after a refresh, and for the same reason: the first shelf has just been
+        // rebuilt from a different page, so there is nothing to focus until it has laid out.
+        // Unconditional, unlike the one above — this one is undoing a focus move the user never
+        // made, so wherever focus drifted to in the meantime is not somewhere they chose to be.
+        .task(id: isApplyingRefresh) {
+            guard isApplyingRefresh else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            isFirstCardFocused = true
+            isApplyingRefresh = false
+        }
         // Stepping out of the banner is the safe moment to swap in anything that arrived while
         // it was in use.
         .onChange(of: isNewsActive) { _, active in
@@ -224,7 +248,8 @@ struct HomeView: View {
                         items: headlines,
                         onFeedLockChange: { isFeedScrollLocked = $0 },
                         onActiveChange: { isNewsActive = $0 },
-                        onDismiss: { isHandingBackFocus = true }
+                        onDismiss: { isHandingBackFocus = true },
+                        canTakeFocus: !isApplyingRefresh
                     )
                     .padding(.horizontal, Metrics.horizontalInset)
                     // Clears the clock, which floats over this screen's top-right corner
@@ -254,6 +279,11 @@ struct HomeView: View {
                             .font(.title3.weight(.semibold))
                         }
                         .accessibilityLabel("Show new videos")
+                        // Coming up out of the first shelf, this is what the user is coming up
+                        // *for*: it is the only thing in the header that wasn't there a moment
+                        // ago, and the one the geometry would otherwise skip in favour of the
+                        // search glyph sitting further right.
+                        .prefersDefaultFocus(in: headerFocus)
                     }
                     Button(action: onOpenSearch) {
                         Image(systemName: "magnifyingglass")
@@ -268,6 +298,9 @@ struct HomeView: View {
                 // Keeps left/right presses inside the header instead of dropping into the
                 // first row, which sits directly beneath it.
                 .focusSection()
+                // Lets the header name its own preferred stop rather than leaving it to which
+                // control happens to be nearest — see the button above.
+                .focusScope(headerFocus)
 
                 if sections.isEmpty && supplementarySections.isEmpty {
                     Text("No recommendations found.")
@@ -486,6 +519,10 @@ struct HomeView: View {
         guard let page = pendingPage else { return }
         pendingPage = nil
         pendingNewCount = 0
+        // Set in the same update as the swap below, not after it: by the time the new sections
+        // have been laid out the focus engine has already picked somewhere to put the focus this
+        // button is about to drop, and the banner has to be out of the running before then.
+        isApplyingRefresh = true
 
         sections = page.sections
         continuation = page.continuation
