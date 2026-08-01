@@ -220,6 +220,55 @@ Parsing MUST be defensive: walk recursively and collect every `tileRenderer` tha
 `watchEndpoint.videoId`, rather than relying on the exact nesting (nesting varies by row type).
 A robust approach: recursively find all `tileRenderer` objects anywhere in the tree.
 
+## COMMENTS — `next` (WEB client, unauthenticated)
+
+Verified with live requests 2026-07-31. The TV client doesn't surface comments, so this uses the
+plain WEB client (`clientName: WEB`, `clientVersion: 2.20260726.00.00`, `X-Youtube-Client-Name: 1`,
+a desktop browser User-Agent). No Bearer token, no visitorData, and the `?key=` param is optional.
+
+Two-step flow:
+
+1. **Find the section** — `next` with `{"videoId":"<id>"}`. The watch response carries the comment
+   section twice (inline under `contents…` and as `engagementPanels[*]`), both as an
+   `itemSectionRenderer` with `sectionIdentifier == "comment-item-section"` whose first
+   `continuationItemRenderer` holds `continuationEndpoint.continuationCommand.token`. The two
+   tokens differ but both resolve to the same comment list. A video with comments off has no such
+   section.
+
+2. **Fetch comments** — `next` with `{"continuation":"<token>"}`. The comment *data* and the
+   comment *list* arrive separately and join on commentId:
+
+```
+frameworkUpdates…mutations[*].payload.commentEntityPayload   <-- the data, keyed by commentId
+  .properties.commentId
+  .properties.content.content        plain text of the comment
+  .properties.publishedTime          "1 year ago"
+  .author.displayName                "@handle"
+  .author.avatarThumbnailUrl
+  .toolbar.likeCountNotliked         abbreviated ("278K"); replies pages: replyCount is ""
+  .toolbar.replyCount                abbreviated; ABSENT when the comment has no replies
+
+onResponseReceivedEndpoints[*].reloadContinuationItemsCommand.continuationItems[*]   <-- the order
+  (appendContinuationItemsAction on later pages; the first page sends TWO reload commands —
+   one holding only the commentsHeaderRenderer, one holding the 20 threads)
+  .commentThreadRenderer
+    .commentViewModel.commentViewModel.commentId             which payload this row shows
+    .replies.commentRepliesRenderer.contents[0]
+      .continuationItemRenderer…continuationCommand.token    fetches THIS thread's replies
+```
+
+The last continuation item of the list is the next PAGE of top-level comments
+(`continuationItemRenderer.continuationEndpoint.continuationCommand.token`). ~20 threads per page.
+
+**Replies pages** (same `next` + continuation call, using a thread's replies token) have no
+`commentThreadRenderer`: `continuationItems[*].commentViewModel` carries `commentId` directly, in
+reply order (payloads still under `frameworkUpdates`, `properties.replyLevel: 1` — reply threads
+are flat, so replies never have reply tokens of their own). Paging is a trailing
+`continuationItemRenderer.button.buttonRenderer` ("Show more replies") whose
+`command.continuationCommand.token` fetches the next ~10; the `viewReplies`/`hideReplies` buttons
+on a thread carry no token, so the one `continuationCommand` under a thread's `replies` is always
+the right one. No comment count was found anywhere in these responses.
+
 ## PLAYBACK — `player` (VISIONOS client, unauthenticated)
 
 `POST https://www.youtube.com/youtubei/v1/player?key=...` body:

@@ -28,12 +28,14 @@ enum AppConfig {
         case tv  // personalized feeds — needs Bearer token
         case visionOS  // playback stream extraction — HLS ladder up to 1080p60, needs visitorData
         case android  // playback fallback — muxed itag 18 only (360p)
+        case web  // comments via /next — the one client verified to return the comment section
 
         var name: String {
             switch self {
             case .tv: return "TVHTML5"
             case .visionOS: return "VISIONOS"
             case .android: return "ANDROID"
+            case .web: return "WEB"
             }
         }
         var version: String {
@@ -41,6 +43,7 @@ enum AppConfig {
             case .tv: return "7.20260707.07.00"
             case .visionOS: return "1.02"
             case .android: return "21.26.364"
+            case .web: return "2.20260726.00.00"
             }
         }
         /// X-Youtube-Client-Name header value.
@@ -49,6 +52,7 @@ enum AppConfig {
             case .tv: return "7"
             case .visionOS: return "101"
             case .android: return "3"
+            case .web: return "1"
             }
         }
         var userAgent: String {
@@ -61,6 +65,9 @@ enum AppConfig {
             case .visionOS:
                 return
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+            case .web:
+                return
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             // swiftlint:enable line_length
             case .android:
                 return "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
@@ -69,13 +76,14 @@ enum AppConfig {
         var referer: String? {
             switch self {
             case .tv, .visionOS: return "https://www.youtube.com/tv"
+            case .web: return "https://www.youtube.com"
             case .android: return nil
             }
         }
         /// Host used for youtubei/v1 calls.
         var host: String {
             switch self {
-            case .tv, .visionOS: return "https://www.youtube.com"
+            case .tv, .visionOS, .web: return "https://www.youtube.com"
             case .android: return "https://youtubei.googleapis.com"
             }
         }
@@ -84,13 +92,13 @@ enum AppConfig {
         var requiresVisitorData: Bool {
             switch self {
             case .visionOS: return true
-            case .tv, .android: return false
+            case .tv, .android, .web: return false
             }
         }
         /// Extra fields merged into context.client.
         var extraClientContext: [String: Any] {
             switch self {
-            case .tv:
+            case .tv, .web:
                 return [:]
             case .visionOS:
                 return [
