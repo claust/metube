@@ -92,6 +92,10 @@ final class WatchProgressSync: ObservableObject {
     func flushNow() {
         flushTask?.cancel()
         guard profile != nil, client != nil, !store.dirty.isEmpty else { return }
+        // Cancelled, not merely replaced: dropping the reference to a running pull would leave
+        // it uncancellable by a later profile switch, and two pushes overlapping would upload
+        // the same rows twice.
+        runTask?.cancel()
         runTask = Task { [weak self] in await self?.push() }
     }
 
@@ -278,8 +282,11 @@ final class WatchProgressSync: ObservableObject {
         guard let profile, let userId = await authenticate(), let client else { return }
         guard self.profile?.id == profile.id else { return }
 
+        // Snapshotted rather than read through `store` each time round: playback can queue more
+        // videos while this loop is awaiting the network, and those belong to the next flush.
+        let queued = store.dirty
         var pushed: [String: Date] = [:]
-        for videoId in store.dirty {
+        for videoId in queued {
             guard !Task.isCancelled else { break }
             guard let entry = store.entries[videoId] else { continue }
             do {

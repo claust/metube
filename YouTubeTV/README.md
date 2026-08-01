@@ -87,8 +87,11 @@ seconds — that is not a network round trip each) and queued across launches, a
 can't be reached costs nothing but the sync. Where the same video has been watched on two
 boxes, the later position wins.
 
-Building without the backend is fine: `APEndpoint`/`APProjectID` in `project.yml` are ordinary
-non-secret values, and an app that can't reach them simply keeps progress on the device.
+**Syncing is off unless you ask for it.** `AP_HOST` and `AP_PROJECT_ID` in
+`Config/Secrets.xcconfig` name your own Appwrite; left empty — which is what a fresh clone
+gets — the app keeps progress on the device and uploads nothing. Neither value is a
+credential, but both point at somebody's personal server, so committing them would mean
+anyone who built this repo sent their viewing history there.
 
 ## Refreshing the feed
 

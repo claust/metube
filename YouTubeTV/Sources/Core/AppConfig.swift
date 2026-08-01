@@ -24,15 +24,21 @@ enum AppConfig {
     static let deviceGrantType = "http://oauth.net/grant_type/device/1.0"
 
     // MARK: Appwrite (watch-progress sync)
-    /// Not read from `Secrets.xcconfig`: an endpoint and a project id are not credentials, and
-    /// keeping them in `project.yml` means a fresh clone needs no extra setup step to build a
-    /// working app. See `Backend/README.md`.
+    /// Where watch progress is backed up, and `nil` when nobody has said. Neither value is a
+    /// credential, but both are *personal* — they name someone's own server — so they live in
+    /// the gitignored `Secrets.xcconfig` alongside the rest. A clone of this public repo that
+    /// hasn't set them syncs nowhere and keeps progress on the device, rather than quietly
+    /// uploading a stranger's viewing history to whichever server happened to be committed.
+    /// See `Backend/README.md`.
+    ///
+    /// The host, not a URL: `//` opens a comment in an xcconfig, so `https://host` truncates
+    /// to `https:` with no error anywhere. The scheme and Appwrite's fixed `/v1` are added
+    /// here instead — HTTPS always, which is what a session cookie deserves.
     static var appwriteEndpoint: URL? {
-        (Bundle.main.object(forInfoDictionaryKey: "APEndpoint") as? String).flatMap(URL.init(string:))
+        let host = secret("APHost")
+        return host.isEmpty ? nil : URL(string: "https://\(host)/v1")
     }
-    static var appwriteProjectID: String {
-        (Bundle.main.object(forInfoDictionaryKey: "APProjectID") as? String) ?? ""
-    }
+    static var appwriteProjectID: String { secret("APProjectID") }
     static let appwriteAuthFunctionID = "metube-auth"
     static let appwriteDatabaseID = "metube"
     static let appwriteWatchProgressTableID = "watchProgress"

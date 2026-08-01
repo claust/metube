@@ -97,10 +97,15 @@ struct AppwriteClient {
     /// Parsed through `HTTPCookie` rather than by reading the header: Foundation folds repeated
     /// `Set-Cookie` headers into one comma-joined string, and cookie values contain commas.
     private static func sessionCookie(from response: URLResponse) -> String? {
-        guard let http = response as? HTTPURLResponse,
-            let fields = http.allHeaderFields as? [String: String],
-            let url = http.url
-        else { return nil }
+        guard let http = response as? HTTPURLResponse, let url = http.url else { return nil }
+        // Rebuilt key by key rather than cast: `allHeaderFields` is `[AnyHashable: Any]`, and a
+        // whole-dictionary `as? [String: String]` is all-or-nothing — one non-string entry and
+        // sign-in silently stops working.
+        var fields: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            guard let key = key as? String, let value = value as? String else { continue }
+            fields[key] = value
+        }
         let pairs = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
             .filter { $0.name.hasPrefix("a_session_") }
             .map { "\($0.name)=\($0.value)" }

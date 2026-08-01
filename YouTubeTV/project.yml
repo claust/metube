@@ -53,11 +53,12 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: dk.delectosoft.metube
             CFBundleURLSchemes: [metube]
-        # The Appwrite project that holds watch progress — see Backend/README.md. Neither
-        # value is a credential, so unlike the YouTube keys they live here rather than in
-        # the gitignored xcconfig, and a fresh clone builds an app that can sync.
-        APEndpoint: https://sabeltiger.dk/v1
-        APProjectID: metube
+        # Where watch progress is backed up — see Backend/README.md. Left empty, the app
+        # simply doesn't sync, which is the right default for a public repo: a committed
+        # endpoint would send whoever built it their own viewing history, to someone
+        # else's server.
+        APHost: $(AP_HOST)
+        APProjectID: $(AP_PROJECT_ID)
         YTInnerTubeAPIKey: $(YT_INNERTUBE_API_KEY)
         YTOAuthClientID: $(YT_OAUTH_CLIENT_ID)
         YTOAuthClientSecret: $(YT_OAUTH_CLIENT_SECRET)
