@@ -13,10 +13,11 @@ struct YouTubeTVApp: App {
     /// deleted, and that has to reach the same instance the views are reading.
     @MainActor
     init() {
-        // `AsyncImage` fetches through `URLSession.shared`, so this is what keeps an avatar or
-        // thumbnail off the network the second time a row scrolls past. The default cache is a
-        // few hundred KB — a screenful of artwork evicts it — and the images are immutable and
-        // served with long lifetimes, so a real one on disk pays off immediately.
+        // `RemoteImage` fetches through `URLSession.shared`, so this is what keeps an avatar or
+        // thumbnail off the network on the next launch — its own memory cache covers this one.
+        // The default cache is a few hundred KB — a screenful of artwork evicts it — and the
+        // images are immutable and served with long lifetimes, so a real one on disk pays off
+        // immediately.
         URLCache.shared = URLCache(
             memoryCapacity: 32 * 1024 * 1024, diskCapacity: 256 * 1024 * 1024)
 

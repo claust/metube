@@ -94,11 +94,10 @@ private struct ProfileAvatarButton: View {
     @ViewBuilder
     private var avatar: some View {
         if let url = profile.avatarURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
+            RemoteImage(url: url) { phase in
+                if let image = phase.image {
                     image.resizable().scaledToFill()
-                default:
+                } else {
                     // Covers the load as well as a failure: a spinner this small reads as a
                     // glitch, and the initial is what the avatar falls back to permanently.
                     initialAvatar

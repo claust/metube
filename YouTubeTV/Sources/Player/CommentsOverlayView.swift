@@ -241,10 +241,12 @@ private struct CommentRow: View {
     }
 
     private var avatar: some View {
-        AsyncImage(url: comment.avatarURL) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
-            Color.white.opacity(0.15)
+        RemoteImage(url: comment.avatarURL) { phase in
+            if let image = phase.image {
+                image.resizable().scaledToFill()
+            } else {
+                Color.white.opacity(0.15)
+            }
         }
         .frame(width: 40, height: 40)
         .clipShape(Circle())

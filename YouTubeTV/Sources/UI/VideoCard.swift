@@ -193,18 +193,16 @@ struct VideoCard: View {
     /// `clipShape` trims the overflow.
     @ViewBuilder
     private var thumbnail: some View {
-        AsyncImage(url: item.thumbnailURL) { phase in
+        RemoteImage(url: item.thumbnailURL) { phase in
             switch phase {
-            case .success(let image):
+            case .loaded(let image):
                 image.resizable().scaledToFill()
-            case .empty:
+            case .loading:
                 ProgressView().tint(.white)
-            case .failure:
+            case .failed:
                 Image(systemName: "play.rectangle")
                     .font(.largeTitle)
                     .foregroundStyle(.secondary)
-            @unknown default:
-                Color.clear
             }
         }
     }
@@ -233,27 +231,33 @@ struct VideoCard: View {
             let diameter: CGFloat = item.isShort ? 64 : 88
             let inset = diameter / 2 * 0.63
 
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                // No spinner and no grey disc: an avatar that pops in late is fine, one that
-                // pulses a placeholder on every row draws the eye away from the artwork.
-                Color.clear
+            // Nothing at all until the picture is there: no spinner and no grey disc. An avatar
+            // that pops in late is fine, one that pulses a placeholder on every row draws the eye
+            // away from the artwork — and the hairline below, drawn around an image that hadn't
+            // arrived, was an empty ring hanging off the corner of every card.
+            RemoteImage(url: url) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: diameter, height: diameter)
+                        .clipShape(Circle())
+                        // A hairline to hold the disc's edge against whichever surface is behind
+                        // it — black unfocused, the grey focus panel otherwise. A Short's disc
+                        // sits on the artwork whether the tile is focused or not, so there it
+                        // stays light.
+                        .overlay(
+                            Circle().strokeBorder(
+                                isFocused && !item.isShort
+                                    ? Color.black.opacity(0.15) : Color.white.opacity(0.3),
+                                lineWidth: 2)
+                        )
+                        // Held short of opaque so a long title running under it still reads. The
+                        // avatar is a hint about the video, not a second subject.
+                        .opacity(0.85)
+                }
             }
             .frame(width: diameter, height: diameter)
-            .clipShape(Circle())
-            // A hairline to hold the disc's edge against whichever surface is behind it — black
-            // unfocused, the grey focus panel otherwise. A Short's disc sits on the artwork
-            // whether the tile is focused or not, so there it stays light.
-            .overlay(
-                Circle().strokeBorder(
-                    isFocused && !item.isShort
-                        ? Color.black.opacity(0.15) : Color.white.opacity(0.3),
-                    lineWidth: 2)
-            )
-            // Held short of opaque so a long title running under it still reads. The avatar
-            // is a hint about the video, not a second subject.
-            .opacity(0.85)
             .offset(x: diameter / 2 - inset, y: diameter / 2 - inset)
         }
     }
