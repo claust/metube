@@ -77,6 +77,14 @@ struct HomeView: View {
     /// news tonight.
     private static let headlinesPollInterval: TimeInterval = 5 * 60
 
+    /// Whether the headline poll should be running at all: Home in front, app in the foreground.
+    ///
+    /// Read as a `.task` id rather than checked inside the loop. A long-lived task captures the
+    /// view as it was when the task started, so a flag tested inside it would answer with the
+    /// value from minutes ago — the id is what actually notices the change, by cancelling the
+    /// task and starting a fresh one.
+    private var isPollingHeadlines: Bool { scenePhase == .active && isFrontmost }
+
     /// Rows from the supplementary feeds (Subscriptions, History). Kept separate from `sections`
     /// so they stay pinned below Home as it pages, rather than being pushed around by it.
     @State private var extraSections: [FeedSection] = []
@@ -139,9 +147,13 @@ struct HomeView: View {
             }
         }
         // Headlines are fetched alongside the feed rather than as part of it — a slow or dead
-        // news feed must not hold up the videos, and this needs no sign-in. Then kept up to
-        // date for as long as Home is on screen, which on a TV can be all evening.
-        .task {
+        // news feed must not hold up the videos, and this needs no sign-in. Then kept up to date
+        // for as long as Home is actually in front, which on a TV can be all evening; a video
+        // playing over it stops the polling rather than quietly fetching news behind the player.
+        // Coming back restarts the task, and the staleness check makes that first pass free
+        // unless the headlines really have aged out.
+        .task(id: isPollingHeadlines) {
+            guard isPollingHeadlines else { return }
             await loadHeadlinesIfStale()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.headlinesPollInterval))
@@ -160,13 +172,9 @@ struct HomeView: View {
         // Coming back from a spell in another app is the safest moment to look: whatever the
         // user was doing here, they left and returned to it.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                checkForNewVideosIfStale()
-                // Unlike the feed, fresh headlines are applied on the spot: the strip has no
-                // focus state worth preserving unless the user is in it, and stale news is the
-                // one thing a news ticker cannot be.
-                Task { await loadHeadlinesIfStale() }
-            }
+            // Headlines are not refreshed here: coming back to the foreground flips
+            // `isPollingHeadlines`, which restarts the poll task and checks them on its way in.
+            if phase == .active { checkForNewVideosIfStale() }
         }
         // Returning from the player or Search is the one moment a refresh must never *apply* —
         // but it is a fine moment to look, so the button is already waiting if the feed moved

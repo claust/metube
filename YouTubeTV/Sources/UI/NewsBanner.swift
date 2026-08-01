@@ -164,10 +164,11 @@ struct NewsBanner: View {
             isCollapsing = true
             onDismiss()
         }
-        // Ends the collapse window. Held by the view rather than by a detached `Task`, so it is
-        // cancelled if the banner goes away mid-collapse and restarted rather than duplicated if
-        // Menu is pressed again — two overlapping timers could otherwise clear `isCollapsing`
-        // out of order and make the strip focusable again while a collapse was still in flight.
+        // Ends the collapse window. Held by the view rather than by a detached `Task`, so it
+        // goes away with the banner instead of outliving it. A second Menu press inside the
+        // window does not extend it — the id is already `true`, so nothing restarts — which is
+        // what is wanted: one timer, however many presses, rather than two that could clear
+        // `isCollapsing` out of order and hand the strip back its focusability mid-collapse.
         .task(id: isCollapsing) {
             guard isCollapsing else { return }
             try? await Task.sleep(for: .milliseconds(400))
@@ -178,6 +179,9 @@ struct NewsBanner: View {
             // One turn of the run loop after the feed has laid out is enough for the focus
             // engine to have picked its first card.
             try? await Task.sleep(for: .milliseconds(400))
+            // `try?` swallows the cancellation, so the check has to be its own — otherwise a
+            // banner that went away during the wait still writes its state on the way out.
+            guard !Task.isCancelled else { return }
             acceptsFocus = true
         }
         // Keyed to the story being read, so the fetch runs once per story and is cancelled the
