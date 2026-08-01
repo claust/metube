@@ -187,10 +187,30 @@ struct ArticleService {
 }
 
 /// Article bodies already fetched, keyed by the feed's item id.
+///
+/// Bounded, because a TV app's "session" is measured in days rather than minutes: only stories
+/// the user actually stops on are ever fetched, so this fills slowly, but nothing here would
+/// ever have let go of one.
 private actor ArticleCache {
+    /// How many bodies to keep. An article is a few kilobytes of text, so this is generous by
+    /// design — it exists to put a ceiling on a week-long session, not to save memory in an
+    /// evening's use.
+    private static let capacity = 40
+
     private var stored: [String: [ArticleBlock]] = [:]
+
+    /// Keys in insertion order, oldest first. Age rather than least-recently-read: headlines
+    /// only move forward, so the oldest body is also the one least likely to be asked for again,
+    /// and tracking reads would mean rewriting this array on every cache hit.
+    private var order: [String] = []
 
     func blocks(forID id: String) -> [ArticleBlock]? { stored[id] }
 
-    func store(_ blocks: [ArticleBlock], forID id: String) { stored[id] = blocks }
+    func store(_ blocks: [ArticleBlock], forID id: String) {
+        if stored[id] == nil { order.append(id) }
+        stored[id] = blocks
+        while order.count > Self.capacity {
+            stored.removeValue(forKey: order.removeFirst())
+        }
+    }
 }
