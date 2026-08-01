@@ -45,16 +45,24 @@ struct RemoteImage<Content: View>: View {
         content(phase)
             // Cancelled when the view goes away, which leaves `phase` on `.loading` rather than
             // on a failure: coming back runs this again and asks for the image afresh.
-            .task(id: url) { await load() }
-            // A load killed by the app going to the background doesn't get a fresh appearance to
-            // retry on — the views are still there, still mounted, still holding whatever they
-            // ended up with. Coming back to the foreground is that retry, and it is the one that
-            // matters: on a TV the screen saver alone is enough to background the app, and every
-            // image still in flight when it does is torn down at once.
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active else { return }
-                Task { await load() }
-            }
+            //
+            // Keyed on the scene phase as well as the URL, so that returning to the foreground
+            // restarts the load. A load killed by the app going to the background gets no fresh
+            // appearance to retry on — the views are still there, still mounted, still holding
+            // whatever they ended up with — and on a TV the screen saver alone is enough to
+            // background the app and tear down every image still in flight.
+            //
+            // The retry belongs on this modifier rather than in an `onChange` firing a `Task` of
+            // its own: an unstructured task there outlives the view that made it, and one still
+            // running when the URL changed would land its result — the previous picture — on
+            // state the new URL had already settled, with nothing left to correct it.
+            .task(id: Reload(url: url, scenePhase: scenePhase)) { await load() }
+    }
+
+    /// What a load is keyed on: change either and the load starts over.
+    private struct Reload: Equatable {
+        let url: URL?
+        let scenePhase: ScenePhase
     }
 
     /// Asks the cache for the image, unless this view already has that exact one.
@@ -175,9 +183,11 @@ actor ImageCache {
         for attempt in 1...attempts {
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                    let image = UIImage(data: data)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
                 else {
+                    throw URLError(.badServerResponse)
+                }
+                guard let image = UIImage(data: data) else {
                     throw URLError(.cannotDecodeContentData)
                 }
                 return image
