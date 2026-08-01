@@ -1,0 +1,55 @@
+{
+    "organizationId": "6999d522001536da3172",
+    "projectId": "metube",
+    "projectName": "MeTube",
+    "endpoint": "https://sabeltiger.dk/v1",
+    "functions": [
+        {
+            "$id": "metube-auth",
+            "name": "MeTube auth",
+            "runtime": "node-22",
+            "path": "functions/metube-auth",
+            "entrypoint": "dist/main.js",
+            "commands": "bun install && bun run build",
+            "ignore": "node_modules",
+            "execute": ["any"],
+            "scopes": ["users.read", "users.write"],
+            "timeout": 15,
+            "logging": true,
+            "enabled": true
+        }
+    ],
+    "tablesDB": [
+        {
+            "$id": "metube",
+            "name": "MeTube",
+            "enabled": true
+        }
+    ],
+    "tables": [
+        {
+            "$id": "watchProgress",
+            "databaseId": "metube",
+            "name": "Watch progress",
+            "enabled": true,
+            "rowSecurity": true,
+            "$permissions": ["create(\"users\")"],
+            "columns": [
+                { "key": "userId", "type": "string", "size": 24, "required": true, "default": null },
+                { "key": "videoId", "type": "string", "size": 24, "required": true, "default": null },
+                { "key": "position", "type": "double", "required": true, "default": null },
+                { "key": "duration", "type": "double", "required": true, "default": null },
+                { "key": "watchedAt", "type": "datetime", "required": true, "default": null }
+            ],
+            "indexes": [
+                { "key": "byUser", "type": "key", "columns": ["userId"], "orders": ["ASC"] },
+                {
+                    "key": "byUserWatchedAt",
+                    "type": "key",
+                    "columns": ["userId", "watchedAt"],
+                    "orders": ["ASC", "ASC"]
+                }
+            ]
+        }
+    ]
+}

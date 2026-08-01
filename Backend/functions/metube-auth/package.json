@@ -1,0 +1,27 @@
+{
+  "name": "metube-auth",
+  "version": "1.0.0",
+  "description": "Turns a YouTube OAuth token into an Appwrite session for the MeTube tvOS app",
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "lint": "oxlint --type-aware src && eslint .",
+    "lint:ox": "oxlint --type-aware src",
+    "lint:es": "eslint ."
+  },
+  "dependencies": {
+    "node-appwrite": "^22.1.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.3.0",
+    "eslint": "^10.0.1",
+    "eslint-plugin-oxlint": "^1.50.0",
+    "globals": "^17.3.0",
+    "oxlint": "^1.50.0",
+    "oxlint-tsgolint": "^0.14.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.0"
+  }
+}

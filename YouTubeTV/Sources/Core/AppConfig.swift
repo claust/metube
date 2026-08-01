@@ -23,6 +23,21 @@ enum AppConfig {
     static let tokenURL = URL(string: "https://www.youtube.com/o/oauth2/token")!
     static let deviceGrantType = "http://oauth.net/grant_type/device/1.0"
 
+    // MARK: Appwrite (watch-progress sync)
+    /// Not read from `Secrets.xcconfig`: an endpoint and a project id are not credentials, and
+    /// keeping them in `project.yml` means a fresh clone needs no extra setup step to build a
+    /// working app. See `Backend/README.md`.
+    static var appwriteEndpoint: URL? {
+        (Bundle.main.object(forInfoDictionaryKey: "APEndpoint") as? String).flatMap(URL.init(string:))
+    }
+    static var appwriteProjectID: String {
+        (Bundle.main.object(forInfoDictionaryKey: "APProjectID") as? String) ?? ""
+    }
+    static let appwriteAuthFunctionID = "metube-auth"
+    static let appwriteDatabaseID = "metube"
+    static let appwriteWatchProgressTableID = "watchProgress"
+    static var bundleID: String { Bundle.main.bundleIdentifier ?? "dk.delectosoft.metube" }
+
     // MARK: InnerTube clients
     enum Client {
         case tv  // personalized feeds — needs Bearer token

@@ -66,7 +66,29 @@ active one offers *Sign out*.
 
 Each profile keeps its own OAuth tokens (Keychain) and its own watch progress, so the feed,
 history and resume positions are whatever that account sees. Signing a profile out deletes its
-watch progress along with its credentials.
+credentials and its watch progress from the device — but not the backup (see below), so signing
+the same account back in restores it.
+
+## Watch progress sync
+
+Resume positions and which videos have been watched are backed up to a self-hosted
+[Appwrite](https://appwrite.io) project, so reinstalling the app — or watching on a second
+Apple TV — doesn't start from nothing. `Backend/` in this repository holds the project: its
+database schema and the one function it needs. `Backend/README.md` covers deploying it.
+
+**There is no extra login.** The YouTube sign-in above is the only one. A profile's id is
+already `sha256` of YouTube's own account id, which is the same value on every device and after
+every reinstall, so it doubles as an Appwrite user id; the `metube-auth` function checks the
+app's YouTube token really belongs to the account it claims, and mints a session from that.
+
+Syncing is local-first and entirely best-effort. UserDefaults stays the source of truth for
+what the feed and player see, uploads are debounced (the player records a position every five
+seconds — that is not a network round trip each) and queued across launches, and a backend that
+can't be reached costs nothing but the sync. Where the same video has been watched on two
+boxes, the later position wins.
+
+Building without the backend is fine: `APEndpoint`/`APProjectID` in `project.yml` are ordinary
+non-secret values, and an app that can't reach them simply keeps progress on the device.
 
 ## Refreshing the feed
 
