@@ -162,6 +162,11 @@ struct NewsBanner: View {
         // the way back off it without walking to the end of the article first.
         .onExitCommand {
             isCollapsing = true
+            // Said outright rather than left to the focus engine to work out from the views
+            // disappearing underneath it. `isActive` is `focus != nil`, so until it clears, the
+            // ticker stays frozen and `onActiveChange(false)` — which is what releases held-back
+            // headlines — hasn't fired yet.
+            focus = nil
             onDismiss()
         }
         // Ends the collapse window. Held by the view rather than by a detached `Task`, so it
@@ -176,8 +181,9 @@ struct NewsBanner: View {
             isCollapsing = false
         }
         .task {
-            // One turn of the run loop after the feed has laid out is enough for the focus
-            // engine to have picked its first card.
+            // Long enough for the feed to have laid out and the focus engine to have settled on
+            // a card. Found by trying it rather than derived: there is no signal to wait on, so
+            // this is a beat comfortably longer than the layout takes, not a precise deadline.
             try? await Task.sleep(for: .milliseconds(400))
             // `try?` swallows the cancellation, so the check has to be its own — otherwise a
             // banner that went away during the wait still writes its state on the way out.
@@ -474,7 +480,10 @@ struct NewsBanner: View {
     private var marquee: some View {
         // Paused literally stops the clock: a frozen strip has nothing to redraw, and this is
         // pinned at the top of Home where it would otherwise tick over for the whole session.
-        TimelineView(.animation(minimumInterval: nil, paused: runStart == nil)) { context in
+        // Paused until there is both a clock and a lap to travel round it. Unmeasured cells
+        // mean `wrapped` returns 0 whatever the time is, so an unpaused timeline would redraw at
+        // display cadence to render the same frame — for ever, if the measurement never lands.
+        TimelineView(.animation(minimumInterval: nil, paused: runStart == nil || laneWidth == nil)) { context in
             let shift = wrapped(distance(at: context.date))
             // The strip is far wider than the screen, and a view that wide would push the whole
             // banner off the right edge. Drawing it as an overlay on an empty box is what keeps
