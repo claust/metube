@@ -25,6 +25,16 @@ final class WatchProgressStore: ObservableObject {
 
     @Published private(set) var entries: [String: Entry] = [:]
 
+    /// Videos whose entry has changed locally since it was last pushed to the backend.
+    /// Persisted alongside the entries, so a queue that hadn't flushed when the app was killed
+    /// is still a queue on the next launch.
+    private(set) var dirty: Set<String> = []
+
+    /// Told when an entry changes locally, so the sync can schedule a push. Not a Combine
+    /// subscription on `entries`: the merge below writes entries that came *from* the backend,
+    /// and pushing those straight back is a round trip that changes nothing.
+    var onLocalChange: (() -> Void)?
+
     /// Below this a video counts as "opened", not "watched" — resuming a few seconds in is
     /// more annoying than starting over, and a sliver of a bar reads as noise.
     private static let minimumPosition: TimeInterval = 10
@@ -56,6 +66,10 @@ final class WatchProgressStore: ObservableObject {
 
     // MARK: - Profiles
 
+    /// Whose history is loaded, for the sync — which needs to know both that a profile is
+    /// active and which one, and must not be able to change it.
+    var activeProfileID: String? { profileID }
+
     /// Points the store at a profile's history, replacing whatever was loaded. Pass `nil` when
     /// the last profile signs out, so the feed can't keep drawing the departed user's progress.
     func activate(profileID: String?) {
@@ -63,17 +77,26 @@ final class WatchProgressStore: ObservableObject {
         generation += 1
         self.profileID = profileID
         entries = profileID.map { load(profileID: $0) } ?? [:]
+        dirty = profileID.map { loadDirty(profileID: $0) } ?? []
     }
 
     /// Key under which one profile's history is stored, kept in one place so the migration and
     /// deletion helpers agree with `persist`.
     private static func storageKey(profileID: String) -> String { "yt.watchProgress.\(profileID)" }
+    /// Its unflushed push queue, kept beside it rather than inside it so the entries on disk
+    /// stay readable by a build that knows nothing about syncing.
+    private static func dirtyKey(profileID: String) -> String { "yt.watchProgress.dirty.\(profileID)" }
 
     private func load(profileID: String) -> [String: Entry] {
         guard let data = defaults.data(forKey: Self.storageKey(profileID: profileID)),
             let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
         else { return [:] }
         return decoded
+    }
+
+    private func loadDirty(profileID: String) -> Set<String> {
+        let stored = defaults.stringArray(forKey: Self.dirtyKey(profileID: profileID)) ?? []
+        return Set(stored)
     }
 
     /// Hands the pre-profiles build's single, un-namespaced history to the profile its login
@@ -84,6 +107,9 @@ final class WatchProgressStore: ObservableObject {
         guard let data = defaults.data(forKey: legacyKey) else { return }
         if defaults.data(forKey: Self.storageKey(profileID: profileID)) == nil {
             defaults.set(data, forKey: Self.storageKey(profileID: profileID))
+            // None of it has ever been pushed, so all of it is owed to the backend.
+            let adopted = (try? JSONDecoder().decode([String: Entry].self, from: data)) ?? [:]
+            defaults.set(Array(adopted.keys), forKey: Self.dirtyKey(profileID: profileID))
         }
         defaults.removeObject(forKey: legacyKey)
         generation += 1
@@ -95,12 +121,21 @@ final class WatchProgressStore: ObservableObject {
         guard let data = defaults.data(forKey: Self.storageKey(profileID: oldID)) else { return }
         defaults.set(data, forKey: Self.storageKey(profileID: newID))
         defaults.removeObject(forKey: Self.storageKey(profileID: oldID))
+        if let queued = defaults.stringArray(forKey: Self.dirtyKey(profileID: oldID)) {
+            defaults.set(queued, forKey: Self.dirtyKey(profileID: newID))
+            defaults.removeObject(forKey: Self.dirtyKey(profileID: oldID))
+        }
         generation += 1
     }
 
-    /// Erases a profile's history — used when the user signs that profile out for good.
+    /// Erases a profile's *local* history — used when the user signs that profile out.
+    ///
+    /// The copy on the backend is deliberately left alone: surviving a sign-out (and a
+    /// reinstall, which is the same thing from here) is the whole point of syncing it. Signing
+    /// the same YouTube account back in lands on the same Appwrite user and pulls it back.
     func discardEntries(for profileID: String) {
         defaults.removeObject(forKey: Self.storageKey(profileID: profileID))
+        defaults.removeObject(forKey: Self.dirtyKey(profileID: profileID))
         generation += 1
     }
 
@@ -135,7 +170,9 @@ final class WatchProgressStore: ObservableObject {
         guard duration.isFinite, duration > 0 else { return }
         let reached = position >= duration - Self.endThreshold ? duration : position
         entries[videoId] = Entry(position: reached, duration: duration, updatedAt: Date())
+        dirty.insert(videoId)
         persist()
+        onLocalChange?()
     }
 
     /// Marks the video as watched through — a full red line on the card, and playback that
@@ -147,6 +184,52 @@ final class WatchProgressStore: ObservableObject {
         // meaningful to store either.
         guard known > 0 else { return }
         entries[videoId] = Entry(position: known, duration: known, updatedAt: Date())
+        dirty.insert(videoId)
+        persist()
+        onLocalChange?()
+    }
+
+    // MARK: - Syncing
+
+    /// Folds in what the backend has, keeping whichever version of each video is newer.
+    ///
+    /// Last-writer-wins by `updatedAt`, which is the right rule for one household with a
+    /// handful of Apple TVs: the only way to lose anything is to watch the same video on two
+    /// boxes at once. Merged entries are *not* marked dirty — they came from the backend, and
+    /// pushing them straight back would be a round trip that changes nothing.
+    func merge(remote: [String: Entry]) {
+        guard profileID != nil else { return }
+        var changed = false
+        for (videoId, entry) in remote where (entries[videoId]?.updatedAt ?? .distantPast) < entry.updatedAt {
+            // A local edit that hasn't been pushed yet is newer than anything the backend can
+            // know about, so it wins on `updatedAt` above and stays queued.
+            entries[videoId] = entry
+            changed = true
+        }
+        guard changed else { return }
+        persist()
+    }
+
+    /// Queues everything the device already knows, so a history that predates syncing — or one
+    /// built while the backend was unreachable — is uploaded rather than sitting there being
+    /// older than a backend that has never heard of it.
+    ///
+    /// Run once per profile, after its first successful pull. `merged` names the videos that
+    /// pull just took *from* the backend, which by definition don't need sending back.
+    func queueAll(except merged: Set<String>) {
+        let owed = Set(entries.keys).subtracting(merged)
+        guard !owed.isSubset(of: dirty) else { return }
+        dirty.formUnion(owed)
+        persist()
+    }
+
+    /// Drops from the queue the entries that were successfully pushed — but only those the
+    /// user hasn't moved on from since. A video still playing while its position uploads gets
+    /// a newer `updatedAt` mid-flight, and clearing that would strand the newer position.
+    func markSynced(_ pushed: [String: Date]) {
+        for (videoId, updatedAt) in pushed where entries[videoId]?.updatedAt == updatedAt {
+            dirty.remove(videoId)
+        }
         persist()
     }
 
@@ -166,8 +249,10 @@ final class WatchProgressStore: ObservableObject {
         // profiles, and this snapshot belongs to the one that was active when it was taken.
         guard let profileID else { return }
         let snapshot = entries
+        let queued = Array(dirty)
         let defaults = defaults
         let key = Self.storageKey(profileID: profileID)
+        let queueKey = Self.dirtyKey(profileID: profileID)
         let generation = generation
         let previous = persistTask
         persistTask = Task.detached(priority: .utility) { [weak self] in
@@ -177,6 +262,7 @@ final class WatchProgressStore: ObservableObject {
             guard let self, await self.generation == generation else { return }
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             defaults.set(data, forKey: key)
+            defaults.set(queued, forKey: queueKey)
         }
     }
 }

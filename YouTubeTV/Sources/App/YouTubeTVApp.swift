@@ -4,6 +4,7 @@ import SwiftUI
 struct YouTubeTVApp: App {
     @StateObject private var authStore: AuthStore
     @StateObject private var watchProgress: WatchProgressStore
+    @StateObject private var watchProgressSync: WatchProgressSync
     @StateObject private var channelAvatars = ChannelAvatarStore()
     @StateObject private var subscriptions = SubscriptionStore()
 
@@ -22,6 +23,8 @@ struct YouTubeTVApp: App {
         let watchProgress = WatchProgressStore()
         _watchProgress = StateObject(wrappedValue: watchProgress)
         _authStore = StateObject(wrappedValue: AuthStore(watchProgress: watchProgress))
+        // Wraps the same store: it is what the sync uploads from and merges into.
+        _watchProgressSync = StateObject(wrappedValue: WatchProgressSync(store: watchProgress))
     }
 
     var body: some Scene {
@@ -29,6 +32,7 @@ struct YouTubeTVApp: App {
             RootView()
                 .environmentObject(authStore)
                 .environmentObject(watchProgress)
+                .environmentObject(watchProgressSync)
                 .environmentObject(channelAvatars)
                 .environmentObject(subscriptions)
         }

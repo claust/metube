@@ -8,7 +8,9 @@ import TVServices
 struct RootView: View {
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var watchProgress: WatchProgressStore
+    @EnvironmentObject private var watchProgressSync: WatchProgressSync
     @EnvironmentObject private var subscriptions: SubscriptionStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedVideo: VideoItem?
     @State private var path: [Destination] = []
     @State private var isAddingProfile = false
@@ -50,6 +52,10 @@ struct RootView: View {
         // first appear, which is what loads the history at launch.
         .onChange(of: authStore.activeProfileID, initial: true) { previous, profileID in
             watchProgress.activate(profileID: profileID)
+            // And is backed up for that profile, so a reinstall doesn't start from nothing.
+            // Ordered after `activate`: the sync merges into whatever history is loaded now.
+            watchProgressSync.activate(
+                profile: authStore.activeProfile, accessToken: authStore.accessToken)
             // Subscriptions belong to an account just as history does, so the card menus follow
             // the active profile rather than showing the previous one's Subscribe/Unsubscribe.
             subscriptions.activate(profileID: profileID)
@@ -67,6 +73,23 @@ struct RootView: View {
             guard previous != profileID else { return }
             path = []
             selectedVideo = nil
+        }
+        // A profile carried over from an older build, or added while the account menu was
+        // unreachable, has no account key until `backfillAccountInfo` supplies one — and
+        // without it the backend has nothing to verify the profile's identity against. This
+        // starts the sync the moment that arrives, rather than at the next profile switch.
+        .onChange(of: authStore.activeProfile?.accountKey) { _, _ in
+            watchProgressSync.activate(
+                profile: authStore.activeProfile, accessToken: authStore.accessToken)
+        }
+        // Coming back: another Apple TV may have watched something in the meantime. Leaving:
+        // push whatever the debounce is still sitting on, because a suspended app may never
+        // get another chance.
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active: watchProgressSync.sync()
+            default: watchProgressSync.flushNow()
+            }
         }
         .onOpenURL { url in
             openTopShelfVideo(url)

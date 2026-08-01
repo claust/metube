@@ -87,6 +87,10 @@ final class AuthStore: ObservableObject {
     /// it behind.
     func signOut(_ profileID: String) {
         watchProgress.discardEntries(for: profileID)
+        // The backup on the server stays — signing back in is meant to restore it — but the
+        // credential that reaches it must not outlive the sign-out. Left behind, the device
+        // would keep read and write access to that account's history with nobody signed in.
+        WatchProgressSync.discardSession(for: profileID)
         invalidate(profileID)
     }
 

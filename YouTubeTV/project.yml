@@ -53,6 +53,12 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: dk.delectosoft.metube
             CFBundleURLSchemes: [metube]
+        # Where watch progress is backed up — see Backend/README.md. Left empty, the app
+        # simply doesn't sync, which is the right default for a public repo: a committed
+        # endpoint would send whoever built it their own viewing history, to someone
+        # else's server.
+        APHost: $(AP_HOST)
+        APProjectID: $(AP_PROJECT_ID)
         YTInnerTubeAPIKey: $(YT_INNERTUBE_API_KEY)
         YTOAuthClientID: $(YT_OAUTH_CLIENT_ID)
         YTOAuthClientSecret: $(YT_OAUTH_CLIENT_SECRET)
