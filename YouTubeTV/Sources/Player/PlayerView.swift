@@ -117,7 +117,10 @@ struct PlayerView: View {
     /// retrying inside its penalty-box logic indefinitely, never marking the item `.failed`.
     /// The cost of being wrong is a video that was merely slow dropping to the 360p fallback,
     /// which still plays.
-    private static let playbackStartTimeout: TimeInterval = 15
+    private static let playbackStartTimeout: Duration = .seconds(15)
+
+    /// How often `awaitPlaybackStart` re-checks while waiting.
+    private static let playbackStartPollInterval: Duration = .milliseconds(250)
 
     /// Whether an attempt got off the ground.
     private enum PlaybackStart {
@@ -233,9 +236,14 @@ struct PlayerView: View {
     /// observations and a timer feeding one continuation that must resume exactly once. A
     /// quarter-second tick over at most `playbackStartTimeout` costs nothing and picks up task
     /// cancellation for free.
+    ///
+    /// Timed on `ContinuousClock` rather than `Date`, which is not monotonic: a TV that syncs
+    /// its clock shortly after a cold boot can step wall time, and a backwards step larger than
+    /// the timeout would leave a `Date` deadline permanently in the future — no fallback, and
+    /// the black screen this whole path exists to avoid.
     @MainActor
     private func awaitPlaybackStart(of player: AVPlayer) async -> PlaybackStart {
-        let deadline = Date().addingTimeInterval(Self.playbackStartTimeout)
+        let deadline = ContinuousClock.now + Self.playbackStartTimeout
         while true {
             if Task.isCancelled { return .cancelled }
             // Frames are moving — anything short of this (`.waitingToPlayAtSpecifiedRate` in
@@ -244,8 +252,10 @@ struct PlayerView: View {
             if let item = player.currentItem, item.status == .failed {
                 return .failed(item.error)
             }
-            guard Date() < deadline else { return .failed(player.currentItem?.error) }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard ContinuousClock.now < deadline else {
+                return .failed(player.currentItem?.error)
+            }
+            try? await Task.sleep(for: Self.playbackStartPollInterval)
         }
     }
 
