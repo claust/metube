@@ -218,6 +218,9 @@ private struct MenuRow: View {
     /// Fixed, so the rows sit in the same places open or shut — the focus that opened the
     /// menu would otherwise land on one row and end up beside another.
     static let rowHeight: CGFloat = 72
+    /// How much narrower than the open panel a row is, so the focused capsule stops short of
+    /// the panel's edge instead of running into the screen behind it.
+    static let panelInset: CGFloat = 44
 
     var body: some View {
         HStack(spacing: 20) {
@@ -238,7 +241,7 @@ private struct MenuRow: View {
         .foregroundStyle(foreground)
         .padding(.horizontal, Self.horizontalPadding)
         .frame(
-            width: isExpanded ? SideMenu.expandedWidth - 44 : SideMenu.railWidth,
+            width: isExpanded ? SideMenu.expandedWidth - Self.panelInset : SideMenu.railWidth,
             height: Self.rowHeight,
             alignment: .leading
         )

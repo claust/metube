@@ -760,7 +760,7 @@ extension HomeView {
 
     /// The whole screen when the first page didn't land. Lives out here rather than in the
     /// view above for room: `type_body_length` is a real ceiling and this is self-contained.
-    func errorView(_ message: String) -> some View {
+    private func errorView(_ message: String) -> some View {
         VStack(spacing: 32) {
             Text("Couldn't load your feed")
                 .font(.title)
