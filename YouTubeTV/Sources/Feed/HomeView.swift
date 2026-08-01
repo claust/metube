@@ -19,6 +19,12 @@ struct HomeView: View {
     /// Called when a card's menu picks "Go to channel". The orchestrator wires this to
     /// `ChannelView`.
     var onOpenChannel: (VideoItem) -> Void
+    /// Called when the first page has settled, however it went. Until then the shell keeps the
+    /// left menu out of the focus engine's reach — see `SideMenu.canTakeFocus`.
+    var onLoadFinished: () -> Void = {}
+    /// Bumped when the left menu picks Home. The feed answers by focusing its first card,
+    /// which is what shuts the menu — see `SideMenu.onSelect`.
+    var focusRequest: Int = 0
 
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
@@ -206,6 +212,12 @@ struct HomeView: View {
         // so wherever focus drifted to in the meantime is not somewhere they chose to be.
         .task(id: isApplyingRefresh) {
             guard isApplyingRefresh else { return }
+            // Cleared first, or the loop below never runs: a binding that is already true
+            // reads as "the card has focus" on the first check. Coming back from another of
+            // the menu's sections it usually *is* already true — these cards were unfocusable
+            // while that screen was up, so nothing set it back down when focus went to the
+            // menu, and the flag is left describing a card that hasn't had focus for a while.
+            isFirstCardFocused = false
             // A second's worth of tries. Long enough for a shelf that is slow to build, short
             // enough that a feed which somehow never offers a card doesn't leave the banner
             // unfocusable for the rest of the session.
@@ -220,6 +232,9 @@ struct HomeView: View {
             // happen while focus is still in mid-air.
             isApplyingRefresh = false
         }
+        // Picking Home in the menu: the same handoff again, borrowed wholesale — focus has to
+        // come off the menu and onto a card, and the banner has to stay out of its way.
+        .onChange(of: focusRequest) { _, _ in isApplyingRefresh = true }
         // Stepping out of the banner is the safe moment to swap in anything that arrived while
         // it was in use.
         .onChange(of: isNewsActive) { _, active in
@@ -353,23 +368,6 @@ struct HomeView: View {
         .scrollDisabled(isFeedScrollLocked)
     }
 
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 32) {
-            Text("Couldn't load your feed")
-                .font(.title)
-                .foregroundStyle(.white)
-            Text(message)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button("Retry") {
-                Task { await load() }
-            }
-            .font(.headline)
-        }
-        .padding(80)
-    }
-
     /// Fetches the headlines, unless the ones on screen are still fresh. Failure is silent by
     /// design: the ticker is a garnish on someone's video feed, and an error banner about the
     /// news would be a worse thing to look at than no news.
@@ -426,7 +424,15 @@ struct HomeView: View {
     private func loadHomeFirstPage() async -> Bool {
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            onLoadFinished()
+        }
+        // Nothing here is focusable while the spinner is up — and the left menu is held out of
+        // the focus engine's reach until this returns, so nothing else is either. The handoff
+        // below is what puts focus on a card once there is one, which is the same problem, and
+        // the same fix, as a refresh.
+        let isFirstLoad = lastLoaded == nil
         do {
             guard
                 let page = try await authStore.authorized({
@@ -438,6 +444,7 @@ struct HomeView: View {
             sections = page.sections
             continuation = page.continuation
             pagesLoaded = 1
+            if isFirstLoad { isApplyingRefresh = true }
             updateTopShelf(from: page.sections)
             lastLoaded = .now
             // A pending page fetched before this one is now older than what's on screen.
@@ -749,6 +756,25 @@ extension HomeView {
     /// The rest of Home, drawn below the subscriptions row. This is what paging grows.
     var trailingSections: ArraySlice<FeedSection> {
         sections[leadSections.endIndex...]
+    }
+
+    /// The whole screen when the first page didn't land. Lives out here rather than in the
+    /// view above for room: `type_body_length` is a real ceiling and this is self-contained.
+    func errorView(_ message: String) -> some View {
+        VStack(spacing: 32) {
+            Text("Couldn't load your feed")
+                .font(.title)
+                .foregroundStyle(.white)
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task { await load() }
+            }
+            .font(.headline)
+        }
+        .padding(80)
     }
 
     /// One of Home's rows. Home is drawn in two stretches with the subscriptions row between

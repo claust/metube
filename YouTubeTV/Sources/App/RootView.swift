@@ -15,6 +15,24 @@ struct RootView: View {
     @State private var path: [Destination] = []
     @State private var isAddingProfile = false
 
+    /// Which of the left menu's screens is showing. Home is the feed the app has always
+    /// opened on; the rest are prototypes — see `MenuPlaceholderPage`.
+    @State private var section: MenuSection = .home
+
+    /// Bumped every time the menu picks a section. The screen it selects answers by taking
+    /// focus — onto its first card, or onto the page itself where there are no cards yet —
+    /// which is what closes the menu behind the press.
+    @State private var focusRequest = 0
+
+    /// True once Home's first page has settled. The menu is out of the focus engine's reach
+    /// until then, so the app opens on the feed rather than on a menu that took the focus by
+    /// default for want of anything else to give it to.
+    @State private var isFeedReady = false
+
+    /// True while the left menu holds focus. Dims the screen behind it, so the panel reads as
+    /// being over the feed rather than beside it.
+    @State private var isMenuExpanded = false
+
     /// Screens reachable from Home. A navigation stack rather than a sheet so the player
     /// cover, attached to the stack, can present over Search too — and so the Menu button
     /// pops back to Home for free, which is what a tvOS user expects.
@@ -104,29 +122,20 @@ struct RootView: View {
 
     private var feed: some View {
         NavigationStack(path: $path) {
-            HomeView(
-                // Home is only in front when nothing is presented over it. It uses this to
-                // decide when looking for a fresher feed is worthwhile — and, more to the
-                // point, never applies one while a video is playing.
-                isFrontmost: selectedVideo == nil && path.isEmpty,
-                onSelectVideo: { selectedVideo = $0 },
-                onOpenSearch: { path.append(.search) },
-                onAddProfile: { isAddingProfile = true },
-                onOpenChannel: openChannel
-            )
-            .navigationDestination(for: Destination.self) { destination in
-                switch destination {
-                case .search:
-                    SearchView(onSelectVideo: { selectedVideo = $0 }, onOpenChannel: openChannel)
-                case .channel(let id, let title):
-                    ChannelView(
-                        channelID: id,
-                        fallbackTitle: title,
-                        onSelectVideo: { selectedVideo = $0 },
-                        onOpenChannel: openChannel
-                    )
+            shell
+                .navigationDestination(for: Destination.self) { destination in
+                    switch destination {
+                    case .search:
+                        SearchView(onSelectVideo: { selectedVideo = $0 }, onOpenChannel: openChannel)
+                    case .channel(let id, let title):
+                        ChannelView(
+                            channelID: id,
+                            fallbackTitle: title,
+                            onSelectVideo: { selectedVideo = $0 },
+                            onOpenChannel: openChannel
+                        )
+                    }
                 }
-            }
         }
         // Each profile gets its own feed: rebuilding on a switch reloads the shelves for the
         // account now signed in, which a view that already loaded once would not do.
@@ -138,6 +147,65 @@ struct RootView: View {
                     selectedVideo = nil
                 })
         }
+    }
+
+    /// The menu and the screen it selects, side by side.
+    ///
+    /// A real `HStack` rather than an overlay, because the focus engine moves by geometry: two
+    /// regions that overlap are not to the left and right of each other, and a left press off
+    /// the first card of a row would have nowhere to go. So the menu claims its rail's width
+    /// from the layout, and only the panel it opens into is drawn over the screen beside it.
+    private var shell: some View {
+        HStack(spacing: 0) {
+            SideMenu(
+                section: $section,
+                canTakeFocus: isFeedReady,
+                onExpandedChange: { isMenuExpanded = $0 },
+                onSelect: { focusRequest += 1 }
+            )
+            // The menu is painted first but has to end up on top: its expanded panel is
+            // wider than the width claimed here and hangs over the screen beside it.
+            .zIndex(1)
+
+            ZStack {
+                // Kept in the tree behind the other sections rather than swapped out, so a
+                // look at Settings doesn't cost a full reload of the feed — and so coming
+                // back lands on the same shelves, scrolled where they were left. Hidden it is
+                // also disabled, which is what keeps its cards out of the focus engine's
+                // reach while something else is on screen.
+                HomeView(
+                    // Home is only in front when nothing is presented over it — and now, when
+                    // it is the section on screen at all. It uses this to decide when looking
+                    // for a fresher feed is worthwhile, and more to the point never applies
+                    // one while a video is playing.
+                    isFrontmost: selectedVideo == nil && path.isEmpty && section == .home,
+                    onSelectVideo: { selectedVideo = $0 },
+                    onOpenSearch: { path.append(.search) },
+                    onAddProfile: { isAddingProfile = true },
+                    onOpenChannel: openChannel,
+                    onLoadFinished: { isFeedReady = true },
+                    focusRequest: focusRequest
+                )
+                .opacity(section == .home ? 1 : 0)
+                .disabled(section != .home)
+
+                if section != .home {
+                    MenuPlaceholderPage(section: section, focusRequest: focusRequest)
+                }
+            }
+            // Reading the menu against a screenful of bright thumbnails is otherwise a fight
+            // the menu loses, and on the quieter screens it still says which of the two the
+            // presses are going to.
+            .opacity(isMenuExpanded ? 0.55 : 1)
+            .animation(.easeOut(duration: 0.22), value: isMenuExpanded)
+        }
+        .background(Color.black.ignoresSafeArea())
+        // Menu on the remote means "back" — on a prototype screen that is Home, which is the
+        // only thing back can mean at the root of the stack. Left alone tvOS would take it as
+        // "leave the app" while the user is two presses into a menu they just opened.
+        // `nil` on Home rather than an empty closure: a handler that does nothing still eats
+        // the press, and Menu at the root of the app is how you leave it.
+        .onExitCommand(perform: section == .home ? nil : { section = .home })
     }
 
     /// Opens the video behind a Top Shelf tile, straight into the player.

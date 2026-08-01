@@ -203,6 +203,24 @@ def imageset(name, w, h, scales, ink_frac=INK_HEIGHT):
     write_json(iset / "Contents.json", {"images": images, "info": INFO})
 
 
+def mark_imageset(name, w, h, scales, ink_frac=0.8):
+    """The bare mark on transparency, for drawing the app's own name inside the app.
+
+    Same monogram as the icon, minus the stone it is carved into: on a black screen the
+    slab would read as a grey tile around the runes. Lives beside the brand assets rather
+    than in them — it fills no tvOS role, it is just an image the app draws.
+    """
+    iset = CATALOG / f"{name}.imageset"
+    iset.mkdir(parents=True, exist_ok=True)
+    stem = name.lower().replace(" ", "-")
+    images = []
+    for scale in scales:
+        filename = f"{stem}{'' if scale == 1 else f'@{scale}x'}.png"
+        layers(w * scale, h * scale, ink_frac)["front"].save(iset / filename)
+        images.append({"filename": filename, "idiom": "tv", "scale": f"{scale}x"})
+    write_json(iset / "Contents.json", {"images": images, "info": INFO})
+
+
 def main():
     if not pathlib.Path(FONT).exists():
         sys.exit(f"{FONT} not found — this script needs macOS's runic-capable system font")
@@ -220,6 +238,11 @@ def main():
     # from filling the whole band.
     imageset("Top Shelf Image", 1920, 720, scales=[1, 2], ink_frac=INK_HEIGHT * 0.62)
     imageset("Top Shelf Image Wide", 2320, 720, scales=[1, 2], ink_frac=INK_HEIGHT * 0.62)
+
+    # Not a brand asset — the menu's header draws this itself.
+    # Wider than it is tall, unlike the icon: with no stone around it the canvas is only
+    # there to hold the monogram, and a square one crops the two runes at the sides.
+    mark_imageset("App Mark", 260, 160, scales=[1, 2])
 
     write_json(
         BRAND / "Contents.json",
