@@ -36,6 +36,7 @@ xcodebuild invocations the rest of this README spells out. `make` on its own lis
 ```sh
 make run        # build, install and launch on the Apple TV simulator
 make deploy     # the same on a paired Apple TV — device auto-detected
+make testflight # archive and upload to TestFlight (see the TestFlight section)
 make check      # SwiftLint + swift-format lint, exactly what CI gates on
 make format     # reformat in place
 make build      # compile for the simulator only (no signing, no device)
@@ -267,6 +268,85 @@ xcrun devicectl device process launch --device "$DEVICE_ID" dk.delectosoft.metub
 
 On a free Apple developer account the installed app stops working after 7 days and must be
 reinstalled; a paid membership lasts a year.
+
+## TestFlight
+
+`make deploy` is for the edit-build-look loop, not for keeping the app on the Apple TV: it
+signs with a *development* provisioning profile, and when that profile expires tvOS stops
+launching the app. A TestFlight build is signed for distribution, installs through the
+TestFlight app on the Apple TV, lasts 90 days, and is replaced by uploading again.
+
+```sh
+make testflight           # archive → export → validate → upload
+make testflight-validate  # same, minus the upload (checks signing + the automated checks)
+make archive              # just produce build-archive/YouTubeTV.ipa
+```
+
+The build number is the git commit count, so it climbs on its own — App Store Connect refuses
+a `CFBundleVersion` it has already seen. Override with `BUILD_NUMBER=<n>` when uploading from
+a branch whose count has drifted below what is already up there. `MARKETING_VERSION` in
+`project.yml` stays hand-owned.
+
+TestFlight requires a **paid** Apple Developer Program membership, which also means
+`YT_DEVICE_ENTITLEMENTS` should now be set — see below.
+
+### One-time setup
+
+1. **Create an App Store Connect API key.** *Users and Access → Integrations → App Store
+   Connect API → Team Keys*, role **Admin**. Note the Key ID and the Issuer ID, and download
+   the `AuthKey_<KEYID>.p8` — Apple serves it once.
+
+   Admin, not App Manager: cloud signing has to mint an *Apple Distribution* certificate, and
+   only Admin and Account Holder may create one. An App Manager key archives fine and then
+   fails the export with `Cloud signing permission error` / `No profiles for '<bundle id>'
+   were found`. A key's role cannot be changed after it is generated, so getting this wrong
+   means making a new key.
+2. **Put the key where the tools look:**
+   ```sh
+   mkdir -p ~/.private_keys && mv ~/Downloads/AuthKey_*.p8 ~/.private_keys/
+   ```
+3. **Name it in `.testflight.env`** (gitignored; copy `.testflight.env.example`):
+   ```
+   ASC_KEY_ID=XXXXXXXXXX
+   ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+   ```
+4. **Turn on the app group** in `Config/Secrets.xcconfig`, which a free account had to leave
+   empty:
+   ```
+   YT_DEVICE_ENTITLEMENTS = Config/AppGroup.entitlements
+   ```
+   Without it the app and the Top Shelf extension get separate containers and testers see no
+   tiles. The script warns if it is still unset.
+5. **Create the app record** in App Store Connect: *Apps → + → New App*, platform tvOS, bundle
+   ID `dk.delectosoft.metube`, any SKU. The record cannot be created from the command line and
+   the upload fails without it. The bundle IDs themselves — app and Top Shelf extension — and
+   the app group are registered automatically by `xcodebuild -allowProvisioningUpdates`.
+
+   For this repo that record already exists, named **Fjernsyn** — the App Store name has to be
+   unique across the store and "YouTube TV" is Google's.
+6. **Add yourself as an internal tester** under *TestFlight → Internal Testing*, then install
+   TestFlight on the Apple TV (App Store → search "TestFlight") and sign in with the same
+   Apple ID. Internal builds skip Beta App Review and appear within minutes of processing.
+
+   The existing group is called *Internal* and has automatic distribution on, so an uploaded
+   build reaches the Apple TV without anyone clicking anything in App Store Connect.
+
+Keep it to internal testing. This app reimplements YouTube's private InnerTube API against
+Google's account; External (Beta App Review) or App Store distribution would very likely be
+rejected.
+
+### From CI
+
+`.github/workflows/testflight.yml` does the same thing on a macOS runner, triggered manually
+(*Actions → TestFlight release → Run workflow*, or `gh workflow run testflight.yml --ref
+master`). It needs these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID` | as in `.testflight.env` |
+| `ASC_KEY_P8` | the `.p8` file, base64-encoded: `base64 -i ~/.private_keys/AuthKey_XXXX.p8 \| pbcopy` |
+| `DEVELOPMENT_TEAM` | your team ID |
+| `YT_INNERTUBE_API_KEY`, `YT_OAUTH_CLIENT_ID`, `YT_OAUTH_CLIENT_SECRET` | as in `Config/Secrets.xcconfig` — the runner has no gitignored file to read, so it writes its own |
 
 ## Drive the simulator remote
 

@@ -9,6 +9,7 @@
 #   make deploy TV_DEVICE=<name-or-udid>
 
 .PHONY: help generate build run test deploy screenshot remote \
+	testflight testflight-validate archive \
 	format lint check clean
 
 SCHEME        = YouTubeTV
@@ -39,6 +40,7 @@ help:
 	@echo "  run         Build, install and launch on the Apple TV simulator"
 	@echo "  test        Run the UI tests on the Apple TV simulator"
 	@echo "  deploy      Build, install and launch on a paired Apple TV"
+	@echo "  testflight  Archive and upload to TestFlight (see README)"
 	@echo "  screenshot  Capture the booted simulator (OUT=<path> to choose the file)"
 	@echo "  remote      Drive the simulator remote, e.g. make remote ARGS='right 2 --shot'"
 	@echo "  format      Reformat Swift sources in place with swift-format"
@@ -103,6 +105,26 @@ deploy: generate
 		"$(DERIVED_DEVICE)/Build/Products/Debug-appletvos/$(APP_NAME).app" && \
 	xcrun devicectl device process launch --device "$$DEVICE" "$(BUNDLE_ID)"
 
+# Archive for the App Store and upload to TestFlight. Prefer this over `deploy`
+# for anything you want to keep using: a development build stops launching when
+# its provisioning profile expires, a TestFlight build lasts 90 days and is
+# replaced by uploading again.
+#
+# One-time setup (App Store Connect API key + app record) is in README.md.
+# The build number comes from the commit count; override with BUILD_NUMBER=<n>.
+testflight:
+	@./Scripts/testflight.sh
+
+# Same pipeline, stopping at App Store Connect's validation — use it to check a
+# change signs and passes the automated checks without burning a build number.
+testflight-validate:
+	@./Scripts/testflight.sh --validate
+
+# Just produce the signed .ipa in build-archive/, without uploading it. Still
+# needs the distribution signing assets, so run it after the one-time setup.
+archive:
+	@./Scripts/testflight.sh --archive
+
 # Screenshot the booted simulator. tvOS has two displays and simctl picks the
 # TVOut one on its own. Override the destination with OUT=<path>.
 OUT ?= /tmp/youtubetv-screenshot.png
@@ -142,4 +164,4 @@ check: lint
 	fi
 
 clean:
-	rm -rf "$(DERIVED)" "$(DERIVED_DEVICE)"
+	rm -rf "$(DERIVED)" "$(DERIVED_DEVICE)" build-archive

@@ -1,0 +1,136 @@
+name: TestFlight release
+
+# Deliberately manual. A TestFlight upload is a thing you decide to do, not a
+# side effect of pushing: macOS runners bill at 10x the Linux rate, every
+# upload burns a build number App Store Connect will never accept twice, and
+# builds expire after 90 days whether or not anyone installed them.
+#
+# Trigger from the Actions tab, or:
+#   gh workflow run testflight.yml --ref master
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag to release from
+        required: false
+        default: master
+      build_number:
+        description: >-
+          Override CFBundleVersion. Leave empty to use the commit count, which
+          is what you want unless a previous upload already claimed that number.
+        required: false
+
+# One release at a time. Two concurrent uploads would race for the same commit
+# count and the loser would be rejected as a duplicate build number.
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Archive & upload
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: YouTubeTV
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          # The build number is `git rev-list --count HEAD`, which a shallow
+          # clone would undercount — and an undercount is an upload rejected
+          # for reusing a build number App Store Connect has already seen.
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Same as in tvos-ci.yml: the selected Xcode may ship without a tvOS SDK,
+      # and archiving needs the device SDK, not just a simulator runtime.
+      - name: Ensure tvOS platform is installed
+        run: |
+          if xcodebuild -showsdks | grep -q appletvos; then
+            echo "tvOS SDK already present."
+          else
+            echo "tvOS SDK missing — downloading platform."
+            sudo xcodebuild -downloadPlatform tvOS
+          fi
+
+      - name: Install tooling (XcodeGen + xcbeautify)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: brew install xcodegen xcbeautify
+
+      # Unlike the CI build, a release build cannot use the placeholder values
+      # in Secrets.example.xcconfig: this bundle is the one people actually sign
+      # in with, so the real YouTube credentials and the signing team have to be
+      # here. The file is gitignored, so CI writes its own from repo secrets.
+      - name: Write Secrets.xcconfig
+        env:
+          YT_INNERTUBE_API_KEY: ${{ secrets.YT_INNERTUBE_API_KEY }}
+          YT_OAUTH_CLIENT_ID: ${{ secrets.YT_OAUTH_CLIENT_ID }}
+          YT_OAUTH_CLIENT_SECRET: ${{ secrets.YT_OAUTH_CLIENT_SECRET }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: |
+          for var in YT_INNERTUBE_API_KEY YT_OAUTH_CLIENT_ID YT_OAUTH_CLIENT_SECRET \
+            DEVELOPMENT_TEAM; do
+            if [ -z "${!var}" ]; then
+              echo "::error::$var secret is not set. See README.md § TestFlight."
+              exit 1
+            fi
+          done
+          cat > Config/Secrets.xcconfig <<CONF
+          YT_INNERTUBE_API_KEY = $YT_INNERTUBE_API_KEY
+          YT_OAUTH_CLIENT_ID = $YT_OAUTH_CLIENT_ID
+          YT_OAUTH_CLIENT_SECRET = $YT_OAUTH_CLIENT_SECRET
+          DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM
+          YT_DEVICE_ENTITLEMENTS = Config/AppGroup.entitlements
+          CONF
+
+      # altool and xcodebuild both look for the key on disk, by key id, in one
+      # of a few fixed directories — there is no flag to pass it inline. The
+      # runner is torn down after the job, but the file is still removed in a
+      # step that runs even on failure.
+      - name: Install App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ]; then
+            echo "::error::ASC_KEY_P8 / ASC_KEY_ID secrets are not set. See README.md § TestFlight."
+            exit 1
+          fi
+          mkdir -p ~/.private_keys && chmod 700 ~/.private_keys
+          printf '%s' "$ASC_KEY_P8" | base64 --decode > ~/.private_keys/"AuthKey_$ASC_KEY_ID.p8"
+          chmod 600 ~/.private_keys/"AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Archive, validate & upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: ./Scripts/testflight.sh
+
+      - name: Remove credentials
+        if: ${{ always() }}
+        run: rm -rf ~/.private_keys Config/Secrets.xcconfig
+
+      # The archive carries the dSYMs, which are the only way to symbolicate a
+      # crash report from this build once the runner is gone.
+      - name: Upload archive artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: testflight-archive
+          path: |
+            YouTubeTV/build-archive/*.ipa
+            YouTubeTV/build-archive/**/*.dSYM
+          retention-days: 14
+          if-no-files-found: warn

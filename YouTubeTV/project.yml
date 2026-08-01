@@ -34,6 +34,18 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Answers App Store Connect's export-compliance question in the bundle rather than
+        # by hand per upload — without it every build lands in TestFlight as "Missing
+        # Compliance" and cannot be distributed until someone clicks through. False is the
+        # accurate answer: the app talks to YouTube over ordinary HTTPS and adds no
+        # encryption of its own, which is exempt.
+        ITSAppUsesNonExemptEncryption: false
+        # Every Apple TV that runs tvOS 18 is arm64, but App Store Connect still rejects a
+        # 64-bit binary that does not say so: "has a 64-bit architecture slice, so you must
+        # include the arm64 value for the UIRequiredDeviceCapabilities key" (error 90502).
+        # Xcode's own template writes this; a generated Info.plist has to declare it here.
+        UIRequiredDeviceCapabilities:
+          - arm64
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         # How a Top Shelf tile reaches the app — see `TopShelfLink`, which is the only
@@ -92,6 +104,10 @@ targets:
         # and App Store validation rejects the bundle.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Same as the host app — App Store Connect validates the extension as its own bundle
+        # and rejects the upload on this one first (error 90502).
+        UIRequiredDeviceCapabilities:
+          - arm64
         NSExtension:
           NSExtensionPointIdentifier: com.apple.tv-top-shelf
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ContentProvider
