@@ -623,8 +623,11 @@ struct HomeView: View {
             return true
         }
         if update(&sections) { return true }
-        for feed in Self.supplementaryFeeds where feedSections[feed] != nil {
-            if update(&feedSections[feed]!) { return true }
+        for feed in Self.supplementaryFeeds {
+            guard var rows = feedSections[feed] else { continue }
+            guard update(&rows) else { continue }
+            feedSections[feed] = rows
+            return true
         }
         return false
     }
