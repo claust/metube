@@ -1,9 +1,12 @@
 import Foundation
 
-/// Errors surfaced while resolving a playable stream URL.
+/// Errors surfaced while resolving a playable stream URL, or while getting it to start.
 enum StreamError: LocalizedError {
     case notPlayable(String)
     case noStream
+    /// Resolved and handed to AVFoundation, but playback never got going — see
+    /// `PlayerView.awaitPlaybackStart`.
+    case stalled
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +16,8 @@ enum StreamError: LocalizedError {
                 : "This video can't be played: \(reason)"
         case .noStream:
             return "No playable stream was found for this video."
+        case .stalled:
+            return "This video's stream didn't start playing."
         }
     }
 }
@@ -20,6 +25,9 @@ enum StreamError: LocalizedError {
 /// A stream ready to hand to AVFoundation.
 struct ResolvedStream {
     let url: URL
+    /// The client that minted this URL. Handed back to `resolveStream(videoId:after:)` if the
+    /// stream turns out not to play, so the ladder can pick up at the next one.
+    let client: AppConfig.Client
     /// User agent of the InnerTube client that minted the URL, sent on media requests so they
     /// stay consistent with the `/player` call. Neither the manifest host nor googlevideo was
     /// observed to enforce it (both serve a mismatched or absent agent), so this is about not
@@ -46,10 +54,27 @@ struct ResolvedStream {
 /// WebM demuxer at all, and AV1 hardware decode starts at A17 Pro while Apple TV 4K tops out
 /// at A15. See reference/INNERTUBE.md.
 struct StreamService {
-    func resolveStream(videoId: String) async throws -> ResolvedStream {
+    /// The clients to try, in order. A client that resolves a URL is not necessarily one that
+    /// plays: `after:` lets the caller walk further down this list when playback itself fails.
+    private static let ladder: [AppConfig.Client] = [.visionOS, .android]
+
+    /// Resolves a stream, optionally skipping past a client that already let us down.
+    ///
+    /// `after` is for the case a URL resolves fine and then won't play — YouTube occasionally
+    /// serves an HLS manifest whose audio renditions all 404, which no amount of retrying the
+    /// same client fixes. Passing the client that failed resumes the ladder at the next one.
+    func resolveStream(
+        videoId: String,
+        after failedClient: AppConfig.Client? = nil
+    ) async throws -> ResolvedStream {
         var firstFailure: Error?
 
-        for client in [AppConfig.Client.visionOS, .android] {
+        var remaining = Self.ladder[...]
+        if let failedClient, let index = remaining.firstIndex(of: failedClient) {
+            remaining = remaining[(index + 1)...]
+        }
+
+        for client in remaining {
             do {
                 let outcome = try await resolve(videoId: videoId, client: client)
                 switch outcome {
@@ -131,7 +156,9 @@ struct StreamService {
         if let hls = json.string(at: "streamingData/hlsManifestUrl"),
             let url = URL(string: hls)
         {
-            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: true))
+            return .stream(
+                ResolvedStream(
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: true))
         }
 
         // 2) Progressive (muxed audio+video) formats under streamingData.formats.
@@ -146,7 +173,9 @@ struct StreamService {
             .compactMap({ usableURL(from: $0) })
             .first
         {
-            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
+            return .stream(
+                ResolvedStream(
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false))
         }
 
         // Otherwise the first progressive MP4 that yields a usable url — a malformed url on one
@@ -156,7 +185,9 @@ struct StreamService {
             .compactMap({ usableURL(from: $0) })
             .first
         {
-            return .stream(ResolvedStream(url: url, userAgent: client.userAgent, isAdaptive: false))
+            return .stream(
+                ResolvedStream(
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false))
         }
 
         // Playable, but this client returned nothing we can use — typically SABR-only, where

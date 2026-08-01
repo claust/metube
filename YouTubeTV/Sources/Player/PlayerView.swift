@@ -109,6 +109,25 @@ struct PlayerView: View {
 
     // MARK: - Lifecycle
 
+    /// How long a resolved stream gets to actually start playing before it is written off and
+    /// the next client in the ladder is tried.
+    ///
+    /// Sized to come in under CoreMedia's own ~20s index-file timeout, because that timeout is
+    /// not dependable: a manifest whose renditions 404 (rather than hang) leaves AVPlayer
+    /// retrying inside its penalty-box logic indefinitely, never marking the item `.failed`.
+    /// The cost of being wrong is a video that was merely slow dropping to the 360p fallback,
+    /// which still plays.
+    private static let playbackStartTimeout: TimeInterval = 15
+
+    /// Whether an attempt got off the ground.
+    private enum PlaybackStart {
+        case started
+        /// Never played. Carries AVFoundation's reason when it had one — a stream that simply
+        /// hangs produces no error at all, hence the optional.
+        case failed(Error?)
+        case cancelled
+    }
+
     @MainActor
     private func load() async {
         // Reset state up front so a re-run (e.g. SwiftUI restarting the .task) can't leave a
@@ -118,56 +137,129 @@ struct PlayerView: View {
         player = nil
         defer { isLoading = false }
 
-        do {
-            let stream = try await StreamService().resolveStream(videoId: video.id)
-            // The view may have been dismissed while awaiting the resolved stream; bail out
-            // before taking over audio output or starting playback for a view that's gone.
-            guard !Task.isCancelled else { return }
-            // Only take over audio output once we actually have a playable stream.
-            activateAudioSession()
-            // Keep CoreMedia's media requests on the same client identity that minted the URL.
-            // AVURLAssetHTTPUserAgentKey is public API (tvOS 16+); the more general
-            // AVURLAssetHTTPHeaderFieldsKey is an undocumented string key, so a typo in it would
-            // silently drop the headers instead of failing to compile.
-            let asset = AVURLAsset(
-                url: stream.url,
-                options: [
-                    AVURLAssetHTTPUserAgentKey: stream.userAgent
-                ])
-            let item = AVPlayerItem(asset: asset)
-            let avPlayer = AVPlayer(playerItem: item)
-            // Queued before the item is ready to play; AVPlayer applies it once it is, so the
-            // transport bar comes up already parked where the user left off.
-            if let resume = watchProgress.resumePosition(for: video.id) {
-                avPlayer.seek(
-                    to: CMTime(seconds: resume, preferredTimescale: 600),
-                    toleranceBefore: .zero, toleranceAfter: .zero,
-                    completionHandler: { _ in })
-            }
-            observePlaybackEnd(of: item)
-            observePlaybackPosition(of: avPlayer)
-            #if DEBUG
-            observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
-            #endif
-            self.player = avPlayer
-            avPlayer.play()
+        // The failure worth showing is the first one: it comes from the preferred client, so it
+        // carries a better explanation than "the 360p fallback didn't work either".
+        var firstFailure: Error?
+        var failedClient: AppConfig.Client?
 
-            // Deliberately after playback has started, and not raced against the stream
-            // resolution with `async let`: SponsorBlock is a nice-to-have, and waiting on a
-            // third-party server before showing the first frame would trade a certain delay
-            // for an uncertain benefit. Attaching a second or two in only matters for a
-            // segment in the opening seconds — rare, and it still gets skipped on the next
-            // tick if playback is still inside it.
-            isLoading = false
-            await loadSponsorSegments(for: avPlayer)
-        } catch {
-            // The view was dismissed while loading — not a real error, so don't show the
-            // error overlay.
-            if isCancellation(error) { return }
-            // A real failure: don't hold the audio session while only an error is shown.
-            deactivateAudioSession()
-            self.loadError = error
+        while true {
+            do {
+                let stream = try await StreamService().resolveStream(
+                    videoId: video.id, after: failedClient)
+                // The view may have been dismissed while awaiting the resolved stream; bail out
+                // before taking over audio output or starting playback for a view that's gone.
+                guard !Task.isCancelled else { return }
+                let avPlayer = startPlayback(of: stream)
+
+                switch await awaitPlaybackStart(of: avPlayer) {
+                case .started:
+                    // Deliberately after playback has started, and not raced against the stream
+                    // resolution with `async let`: SponsorBlock is a nice-to-have, and waiting on
+                    // a third-party server before showing the first frame would trade a certain
+                    // delay for an uncertain benefit. Attaching a second or two in only matters
+                    // for a segment in the opening seconds — rare, and it still gets skipped on
+                    // the next tick if playback is still inside it.
+                    isLoading = false
+                    await loadSponsorSegments(for: avPlayer)
+                    return
+                case .cancelled:
+                    return
+                case .failed(let error):
+                    // This URL resolved but won't play, so the same client has nothing better to
+                    // offer — drop it and pick the ladder up at the next one. The loading overlay
+                    // stays up meanwhile rather than showing the dead player behind it.
+                    discardAttempt(avPlayer)
+                    if firstFailure == nil { firstFailure = error ?? StreamError.stalled }
+                    failedClient = stream.client
+                }
+            } catch {
+                // The view was dismissed while loading — not a real error, so don't show the
+                // error overlay.
+                if isCancellation(error) { return }
+                // A real failure: don't hold the audio session while only an error is shown.
+                deactivateAudioSession()
+                // `error` here is the ladder running out (`.noStream`) whenever an earlier
+                // attempt already failed, so prefer that attempt's reason.
+                self.loadError = firstFailure ?? error
+                return
+            }
         }
+    }
+
+    /// Builds a player for a resolved stream, wires up the observers that follow it, and starts
+    /// it going.
+    @MainActor
+    private func startPlayback(of stream: ResolvedStream) -> AVPlayer {
+        // Only take over audio output once we actually have a playable stream.
+        activateAudioSession()
+        // Keep CoreMedia's media requests on the same client identity that minted the URL.
+        // AVURLAssetHTTPUserAgentKey is public API (tvOS 16+); the more general
+        // AVURLAssetHTTPHeaderFieldsKey is an undocumented string key, so a typo in it would
+        // silently drop the headers instead of failing to compile.
+        let asset = AVURLAsset(
+            url: stream.url,
+            options: [
+                AVURLAssetHTTPUserAgentKey: stream.userAgent
+            ])
+        let item = AVPlayerItem(asset: asset)
+        let avPlayer = AVPlayer(playerItem: item)
+        // Queued before the item is ready to play; AVPlayer applies it once it is, so the
+        // transport bar comes up already parked where the user left off.
+        if let resume = watchProgress.resumePosition(for: video.id) {
+            avPlayer.seek(
+                to: CMTime(seconds: resume, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero,
+                completionHandler: { _ in })
+        }
+        observePlaybackEnd(of: item)
+        observePlaybackPosition(of: avPlayer)
+        #if DEBUG
+        observeDeliveredResolution(of: item, adaptive: stream.isAdaptive)
+        #endif
+        self.player = avPlayer
+        avPlayer.play()
+        return avPlayer
+    }
+
+    /// Waits for a freshly started attempt to either play or prove that it won't.
+    ///
+    /// Polled rather than observed: the three things worth watching (the item failing, the
+    /// player reaching `.playing`, and the deadline passing) would otherwise need two KVO
+    /// observations and a timer feeding one continuation that must resume exactly once. A
+    /// quarter-second tick over at most `playbackStartTimeout` costs nothing and picks up task
+    /// cancellation for free.
+    @MainActor
+    private func awaitPlaybackStart(of player: AVPlayer) async -> PlaybackStart {
+        let deadline = Date().addingTimeInterval(Self.playbackStartTimeout)
+        while true {
+            if Task.isCancelled { return .cancelled }
+            // Frames are moving — anything short of this (`.waitingToPlayAtSpecifiedRate` in
+            // particular) is exactly the state a stream stuck behind 404s sits in.
+            if player.timeControlStatus == .playing { return .started }
+            if let item = player.currentItem, item.status == .failed {
+                return .failed(item.error)
+            }
+            guard Date() < deadline else { return .failed(player.currentItem?.error) }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    /// Detaches everything `startPlayback` attached and drops the player, leaving the view ready
+    /// for the next attempt. Deliberately keeps the audio session: another attempt follows.
+    @MainActor
+    private func discardAttempt(_ avPlayer: AVPlayer) {
+        removeTimeObserver()
+        skipper.detach()
+        if let didPlayToEndObserver {
+            NotificationCenter.default.removeObserver(didPlayToEndObserver)
+            self.didPlayToEndObserver = nil
+        }
+        #if DEBUG
+        resolutionObservation?.invalidate()
+        resolutionObservation = nil
+        #endif
+        avPlayer.pause()
+        player = nil
     }
 
     /// Looks up the community's segment list for this video and hands it to the skipper.
