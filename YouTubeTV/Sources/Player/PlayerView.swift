@@ -163,6 +163,11 @@ struct PlayerView: View {
                     await loadSponsorSegments(for: avPlayer)
                     return
                 case .cancelled:
+                    // Nothing is waiting on this attempt any more, and it never started playing.
+                    // `onDisappear` would tear it down too, but only once SwiftUI gets round to
+                    // it — until then a half-started player would keep its observers installed
+                    // behind whatever replaces it.
+                    discardAttempt(avPlayer)
                     return
                 case .failed(let error):
                     // This URL resolved but won't play, so the same client has nothing better to
@@ -245,7 +250,12 @@ struct PlayerView: View {
     }
 
     /// Detaches everything `startPlayback` attached and drops the player, leaving the view ready
-    /// for the next attempt. Deliberately keeps the audio session: another attempt follows.
+    /// for the next attempt. Safe to run after `teardown` has already been through: every step
+    /// is guarded on state that teardown clears.
+    ///
+    /// Deliberately leaves the audio session alone. A retry needs it, and on the cancellation
+    /// path `teardown` is the one that gives it up — releasing it here would hand audio back
+    /// mid-dismissal for no gain.
     @MainActor
     private func discardAttempt(_ avPlayer: AVPlayer) {
         removeTimeObserver()
