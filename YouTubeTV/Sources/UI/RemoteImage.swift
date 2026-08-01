@@ -25,6 +25,10 @@ struct RemoteImage<Content: View>: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var phase: RemoteImagePhase
+    /// Which URL `phase` is holding an image of. A view can outlive the URL it was given — the
+    /// news panel stays mounted while the strip steps from story to story — and state persists
+    /// across that, so "already loaded" has to mean *this* image and not merely some image.
+    @State private var loadedURL: URL?
 
     init(url: URL?, @ViewBuilder content: @escaping (RemoteImagePhase) -> Content) {
         self.url = url
@@ -32,8 +36,9 @@ struct RemoteImage<Content: View>: View {
         // Straight from the cache where there's a hit, so a card that is rebuilt — scrolled back
         // to, or redrawn under a refreshed page — draws its artwork in the first frame instead of
         // blinking through a placeholder on its way back to the image it already had.
-        _phase = State(
-            initialValue: url.flatMap(ImageCache.shared.cached(for:)).map(RemoteImagePhase.loaded) ?? .loading)
+        let cached = url.flatMap(ImageCache.shared.cached(for:))
+        _phase = State(initialValue: cached.map(RemoteImagePhase.loaded) ?? .loading)
+        _loadedURL = State(initialValue: cached == nil ? nil : url)
     }
 
     var body: some View {
@@ -52,12 +57,29 @@ struct RemoteImage<Content: View>: View {
             }
     }
 
-    /// Asks the cache for the image, unless this view already has it.
+    /// Asks the cache for the image, unless this view already has that exact one.
     private func load() async {
-        guard let url else { return }
-        if case .loaded = phase { return }
+        guard let url else {
+            phase = .loading
+            loadedURL = nil
+            return
+        }
+        if loadedURL == url, case .loaded = phase { return }
+        // A different URL than the one on screen: whatever is showing is now the wrong picture,
+        // so it goes before the new one is asked for. From the cache in the same breath where
+        // there is a hit, so stepping back to a story already seen doesn't blink.
+        if loadedURL != url {
+            loadedURL = nil
+            if let cached = ImageCache.shared.cached(for: url) {
+                phase = .loaded(cached)
+                loadedURL = url
+                return
+            }
+            phase = .loading
+        }
         do {
             phase = .loaded(Image(uiImage: try await ImageCache.shared.image(for: url)))
+            loadedURL = url
         } catch {
             // A cancelled load leaves the phase alone. Nothing was learned about the image, only
             // that nobody was waiting for it at that moment — and `.failed` is a verdict this
@@ -118,6 +140,11 @@ actor ImageCache {
         if let running = inFlight[url] {
             task = running
         } else {
+            // Unstructured, which is what keeps the download alive independently of whoever asked
+            // for it: an unstructured task is not a child of the task that made it and does not
+            // inherit its cancellation, so a card scrolling away mid-download leaves the fetch
+            // running for the cards still waiting on it. Awaiting `value` below doesn't propagate
+            // the waiter's cancellation either — it only rethrows what the download itself threw.
             task = Task { try await Self.download(url) }
             inFlight[url] = task
         }
@@ -128,6 +155,10 @@ actor ImageCache {
             memory.insert(image, for: url)
             return image
         } catch {
+            // Cleared on every outcome, cancellation included. A task that ended is not one a
+            // later caller can join — leaving it here would hand everyone who asks afterwards the
+            // same stale failure for good, which is the shape of bug this whole type exists to
+            // put right.
             inFlight[url] = nil
             throw error
         }
