@@ -65,6 +65,10 @@ struct HomeView: View {
     /// True while the strip is focused or a story is open — see `NewsBanner.onActiveChange`.
     @State private var isNewsActive = false
 
+    /// True between Menu being pressed in the news panel and focus arriving on the first card.
+    /// Drives the handoff below.
+    @State private var isHandingBackFocus = false
+
     /// Guards against two headline fetches running at once. The poll below and the return from
     /// the background can both come due in the same moment, and `headlinesLoaded` is only
     /// written when a fetch lands — so without this they would both pass the staleness check and
@@ -161,6 +165,19 @@ struct HomeView: View {
                 await loadHeadlinesIfStale()
             }
         }
+        // Focus back to the feed a beat after Menu, once the banner has let go and the first
+        // shelf is on screen and built again — asking any sooner finds no card to focus.
+        //
+        // Held by the view rather than by a detached `Task` so it dies with Home, and re-checked
+        // on the way out: 120ms is long enough for the user to have gone straight back up into
+        // the ticker, and this must not then yank them out of it.
+        .task(id: isHandingBackFocus) {
+            guard isHandingBackFocus else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            if !isNewsActive { isFirstCardFocused = true }
+            isHandingBackFocus = false
+        }
         // Stepping out of the banner is the safe moment to swap in anything that arrived while
         // it was in use.
         .onChange(of: isNewsActive) { _, active in
@@ -206,14 +223,7 @@ struct HomeView: View {
                         items: headlines,
                         onFeedLockChange: { isFeedScrollLocked = $0 },
                         onActiveChange: { isNewsActive = $0 },
-                        onDismiss: {
-                            // A beat after the banner has let go of focus, so the first shelf
-                            // is back on screen and built by the time this asks for it.
-                            Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(120))
-                                isFirstCardFocused = true
-                            }
-                        }
+                        onDismiss: { isHandingBackFocus = true }
                     )
                     .padding(.horizontal, Metrics.horizontalInset)
                     // Clears the clock, which floats over this screen's top-right corner

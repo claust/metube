@@ -70,6 +70,13 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
     private var buffer = ""
     private var items: [NewsItem] = []
 
+    /// The elements whose text is kept. Anything else inside an `<item>` is markup we are
+    /// passing through rather than a field, and must not disturb the buffer — see the two
+    /// callbacks below.
+    private static let capturedElements: Set<String> = [
+        "title", "description", "link", "guid", "pubDate",
+    ]
+
     /// The raw strings of one `<item>`, before they are turned into a `NewsItem`.
     private struct Fields {
         var title = ""
@@ -111,10 +118,10 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
         _ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
         qualifiedName: String?, attributes: [String: String]
     ) {
-        buffer = ""
         switch elementName {
         case "item":
             current = Fields()
+            buffer = ""
         case "media:thumbnail", "media:content":
             // The picture is an attribute on an empty element, so it is read here rather than
             // at the closing tag. Guarded on `current` because the channel-level `<image>`
@@ -123,7 +130,10 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
                 current?.imageURL = url
             }
         default:
-            break
+            // Only a field we capture starts a fresh buffer. A tag nested inside one — markup
+            // in a `<description>` that the feed didn't wrap in CDATA, say — would otherwise
+            // wipe the text accumulated so far and cut the field off at the first inner tag.
+            if Self.capturedElements.contains(elementName) { buffer = "" }
         }
     }
 
@@ -142,22 +152,31 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
         _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
         qualifiedName: String?
     ) {
-        defer { buffer = "" }
-        guard current != nil else { return }
-        let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard current != nil else {
+            buffer = ""
+            return
+        }
+        if elementName == "item" {
+            if let fields = current, let item = makeItem(from: fields) { items.append(item) }
+            current = nil
+            buffer = ""
+            return
+        }
+        // The closing half of the rule above: a nested tag ending must leave the enclosing
+        // field's text where it is. Its own text has already been appended, so markup inside a
+        // field comes through as the text with the tags dropped.
+        guard Self.capturedElements.contains(elementName) else { return }
 
+        let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
         switch elementName {
         case "title": current?.title = text
         case "description": current?.description = text
         case "link": current?.link = text
         case "guid": current?.guid = text
         case "pubDate": current?.pubDate = text
-        case "item":
-            if let fields = current, let item = makeItem(from: fields) { items.append(item) }
-            current = nil
-        default:
-            break
+        default: break
         }
+        buffer = ""
     }
 
     /// Builds an item, or `nil` for an entry with no headline — there is nothing to show for it.
