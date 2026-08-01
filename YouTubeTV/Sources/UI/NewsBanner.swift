@@ -344,12 +344,16 @@ struct NewsBanner: View {
                 .modifier(StepFocus(focus: $focus, field: .loading, isStop: isLoadingArticle))
                 .onMoveCommand(perform: stepStory)
         } else {
+            // Walked once per render and reused below. `steps` re-splits the whole article on
+            // every access, and it was read again for each row inside the loop — which made the
+            // split quadratic in the number of steps for no reason.
+            let renderedSteps = steps
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 20) {
                         // Anchor for the scroll back to the top below.
                         Color.clear.frame(height: 0).id(Self.readerTop)
-                        ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                        ForEach(Array(renderedSteps.enumerated()), id: \.offset) { index, step in
                             VStack(alignment: .leading, spacing: 20) {
                                 ForEach(Array(step.enumerated()), id: \.offset) { _, block in
                                     switch block.kind {
@@ -373,7 +377,7 @@ struct NewsBanner: View {
                             // Blank space under the closing sentence — see `endInset`. Inside the
                             // last step's own frame, so that tvOS scrolling that step into view
                             // brings the gap with it.
-                            .padding(.bottom, index == steps.count - 1 ? Self.endInset : 0)
+                            .padding(.bottom, index == renderedSteps.count - 1 ? Self.endInset : 0)
                             // The opening step is a stop only once the reader has focus.
                             //
                             // Coming *down* from the strip it must not be: it is already on
