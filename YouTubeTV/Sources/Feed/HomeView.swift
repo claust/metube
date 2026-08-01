@@ -65,6 +65,12 @@ struct HomeView: View {
     /// True while the strip is focused or a story is open — see `NewsBanner.onActiveChange`.
     @State private var isNewsActive = false
 
+    /// Guards against two headline fetches running at once. The poll below and the return from
+    /// the background can both come due in the same moment, and `headlinesLoaded` is only
+    /// written when a fetch lands — so without this they would both pass the staleness check and
+    /// both go to the network for the same answer.
+    @State private var isLoadingHeadlines = false
+
     /// How often to look for newer headlines while Home is sitting on screen. The check itself
     /// is cheap and usually finds nothing — `headlinesStaleAfter` decides whether it goes to the
     /// network at all — but without it a TV left on Home would still be showing this morning's
@@ -312,6 +318,10 @@ struct HomeView: View {
         if let headlinesLoaded, Date().timeIntervalSince(headlinesLoaded) < Self.headlinesStaleAfter {
             return
         }
+        guard !isLoadingHeadlines else { return }
+        isLoadingHeadlines = true
+        defer { isLoadingHeadlines = false }
+
         let items = await NewsService().headlines()
         // Nothing came back — every source failed, or the feed is empty. Deliberately *not*
         // counted as loaded, so the next poll tries again in five minutes rather than sitting on
