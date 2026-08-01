@@ -29,9 +29,65 @@ struct HomeView: View {
     /// so one dialog serves every row.
     @State private var menuItem: VideoItem?
 
+    /// True while the news panel is being read — see `NewsBanner.isFeedLocked`. Holds this
+    /// screen's scroll view still so that scrolling the article doesn't scroll the feed too.
+    @State private var isFeedScrollLocked = false
+
+    /// Focus handle for the very first video card. Set when the news panel is dismissed with
+    /// Menu, which is the one moment something other than the focus engine decides where focus
+    /// belongs: the user asked to leave the news, and the feed's first card is where they were
+    /// heading.
+    @FocusState private var isFirstCardFocused: Bool
+
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+
+    /// Headlines for the ticker across the top. Independent of the feed in every way — public
+    /// RSS, no token — so an empty or failed fetch just leaves the strip off rather than
+    /// affecting Home.
+    @State private var headlines: [NewsItem] = []
+
+    /// How old the headlines have to be before refetching them. BBC's feed declares a 15-minute
+    /// `<ttl>`; matching it means the refetch is usually served from cache and costs nothing.
+    private static let headlinesStaleAfter: TimeInterval = 15 * 60
+    /// When the headlines on screen were fetched. `nil` until the first load.
+    @State private var headlinesLoaded: Date?
+
+    /// Fresher headlines, fetched while the ticker was in use and deliberately not applied.
+    ///
+    /// Swapping the list out from under someone mid-story is the one thing a ticker must not
+    /// do: the strip is keyed by headline, so a new list restarts the scroll, and the article
+    /// being read would be replaced by whatever now sits at that position. These wait for the
+    /// user to step out of the banner, which is a moment where nothing is lost.
+    @State private var pendingHeadlines: [NewsItem] = []
+
+    /// True while the strip is focused or a story is open — see `NewsBanner.onActiveChange`.
+    @State private var isNewsActive = false
+
+    /// True between Menu being pressed in the news panel and focus arriving on the first card.
+    /// Drives the handoff below.
+    @State private var isHandingBackFocus = false
+
+    /// Guards against two headline fetches running at once. The poll below and the return from
+    /// the background can both come due in the same moment, and `headlinesLoaded` is only
+    /// written when a fetch lands — so without this they would both pass the staleness check and
+    /// both go to the network for the same answer.
+    @State private var isLoadingHeadlines = false
+
+    /// How often to look for newer headlines while Home is sitting on screen. The check itself
+    /// is cheap and usually finds nothing — `headlinesStaleAfter` decides whether it goes to the
+    /// network at all — but without it a TV left on Home would still be showing this morning's
+    /// news tonight.
+    private static let headlinesPollInterval: TimeInterval = 5 * 60
+
+    /// Whether the headline poll should be running at all: Home in front, app in the foreground.
+    ///
+    /// Read as a `.task` id rather than checked inside the loop. A long-lived task captures the
+    /// view as it was when the task started, so a flag tested inside it would answer with the
+    /// value from minutes ago — the id is what actually notices the change, by cancelling the
+    /// task and starting a fresh one.
+    private var isPollingHeadlines: Bool { scenePhase == .active && isFrontmost }
 
     /// Rows from the supplementary feeds (Subscriptions, History). Kept separate from `sections`
     /// so they stay pinned below Home as it pages, rather than being pushed around by it.
@@ -94,9 +150,47 @@ struct HomeView: View {
                 await load()
             }
         }
+        // Headlines are fetched alongside the feed rather than as part of it — a slow or dead
+        // news feed must not hold up the videos, and this needs no sign-in. Then kept up to date
+        // for as long as Home is actually in front, which on a TV can be all evening; a video
+        // playing over it stops the polling rather than quietly fetching news behind the player.
+        // Coming back restarts the task, and the staleness check makes that first pass free
+        // unless the headlines really have aged out.
+        .task(id: isPollingHeadlines) {
+            guard isPollingHeadlines else { return }
+            await loadHeadlinesIfStale()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.headlinesPollInterval))
+                guard !Task.isCancelled else { return }
+                await loadHeadlinesIfStale()
+            }
+        }
+        // Focus back to the feed a beat after Menu, once the banner has let go and the first
+        // shelf is on screen and built again — asking any sooner finds no card to focus.
+        //
+        // Held by the view rather than by a detached `Task` so it dies with Home, and re-checked
+        // on the way out: 120ms is long enough for the user to have gone straight back up into
+        // the ticker, and this must not then yank them out of it.
+        .task(id: isHandingBackFocus) {
+            guard isHandingBackFocus else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            if !isNewsActive { isFirstCardFocused = true }
+            isHandingBackFocus = false
+        }
+        // Stepping out of the banner is the safe moment to swap in anything that arrived while
+        // it was in use.
+        .onChange(of: isNewsActive) { _, active in
+            if !active, !pendingHeadlines.isEmpty {
+                headlines = pendingHeadlines
+                pendingHeadlines = []
+            }
+        }
         // Coming back from a spell in another app is the safest moment to look: whatever the
         // user was doing here, they left and returned to it.
         .onChange(of: scenePhase) { _, phase in
+            // Headlines are not refreshed here: coming back to the foreground flips
+            // `isPollingHeadlines`, which restarts the poll task and checks them on its way in.
             if phase == .active { checkForNewVideosIfStale() }
         }
         // Returning from the player or Search is the one moment a refresh must never *apply* —
@@ -124,6 +218,24 @@ struct HomeView: View {
     private var feedRows: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 48) {
+                if !headlines.isEmpty {
+                    NewsBanner(
+                        items: headlines,
+                        onFeedLockChange: { isFeedScrollLocked = $0 },
+                        onActiveChange: { isNewsActive = $0 },
+                        onDismiss: { isHandingBackFocus = true }
+                    )
+                    .padding(.horizontal, Metrics.horizontalInset)
+                    // Clears the clock, which floats over this screen's top-right corner
+                    // outside the safe area and would otherwise sit on the strip. Kept tight
+                    // for the reason in `NewsBanner.panelHeight`: every point here is a point
+                    // of slack the open panel doesn't have at the bottom.
+                    .padding(.top, 24)
+                    // The strip handles left/right itself, stepping between headlines —
+                    // this stops those presses escaping into the header below it.
+                    .focusSection()
+                }
+
                 HStack(spacing: 24) {
                     Text("Home")
                         .font(.system(size: 56, weight: .bold))
@@ -168,7 +280,9 @@ struct HomeView: View {
                             section: section,
                             onSelectVideo: onSelectVideo,
                             onLongPressVideo: { menuItem = $0 },
-                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
+                            onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
+                            firstCardFocus: section.id == sections.first?.id
+                                ? $isFirstCardFocused : nil
                         )
                         .onAppear { prefetchIfNeeded(from: section) }
                     }
@@ -192,6 +306,9 @@ struct HomeView: View {
             }
             .padding(.vertical, 60)
         }
+        // Held still while a news story is being read, so the article scrolls inside its panel
+        // instead of taking the whole feed with it.
+        .scrollDisabled(isFeedScrollLocked)
     }
 
     private func errorView(_ message: String) -> some View {
@@ -209,6 +326,35 @@ struct HomeView: View {
             .font(.headline)
         }
         .padding(80)
+    }
+
+    /// Fetches the headlines, unless the ones on screen are still fresh. Failure is silent by
+    /// design: the ticker is a garnish on someone's video feed, and an error banner about the
+    /// news would be a worse thing to look at than no news.
+    @MainActor
+    private func loadHeadlinesIfStale() async {
+        if let headlinesLoaded, Date().timeIntervalSince(headlinesLoaded) < Self.headlinesStaleAfter {
+            return
+        }
+        guard !isLoadingHeadlines else { return }
+        isLoadingHeadlines = true
+        defer { isLoadingHeadlines = false }
+
+        let items = await NewsService().headlines()
+        // Nothing came back — every source failed, or the feed is empty. Deliberately *not*
+        // counted as loaded, so the next poll tries again in five minutes rather than sitting on
+        // the stale headlines for the full fifteen. The headlines already on screen stay there
+        // in the meantime.
+        guard !items.isEmpty else { return }
+        // A fetch that returned something counts as loaded whether or not it was applied on the
+        // spot: refetching every poll while someone reads a long article would cost the same
+        // request for the same answer.
+        headlinesLoaded = Date()
+        if isNewsActive {
+            pendingHeadlines = items
+        } else {
+            headlines = items
+        }
     }
 
     @MainActor
