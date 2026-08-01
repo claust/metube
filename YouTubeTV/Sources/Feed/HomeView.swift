@@ -194,13 +194,30 @@ struct HomeView: View {
         }
         // Same handoff after a refresh, and for the same reason: the first shelf has just been
         // rebuilt from a different page, so there is nothing to focus until it has laid out.
-        // Unconditional, unlike the one above — this one is undoing a focus move the user never
-        // made, so wherever focus drifted to in the meantime is not somewhere they chose to be.
+        //
+        // Asked over and over until the card confirms it has focus, rather than once after a
+        // fixed beat. There is no telling how long the rebuilt shelf takes to lay out, and a
+        // request that arrives before it exists is accepted and quietly dropped — which is the
+        // failure that matters here, because focus is then on nothing at all, and the moment the
+        // banner is focusable again tvOS gives focus to the topmost view on the screen. That is
+        // the strip, and landing there opens the story panel: exactly what this is preventing.
+        //
+        // Unconditional, unlike the one above — this is undoing a focus move the user never made,
+        // so wherever focus drifted to in the meantime is not somewhere they chose to be.
         .task(id: isApplyingRefresh) {
             guard isApplyingRefresh else { return }
-            try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled else { return }
-            isFirstCardFocused = true
+            // A second's worth of tries. Long enough for a shelf that is slow to build, short
+            // enough that a feed which somehow never offers a card doesn't leave the banner
+            // unfocusable for the rest of the session.
+            var attempts = 0
+            while !isFirstCardFocused, attempts < 10 {
+                isFirstCardFocused = true
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+                attempts += 1
+            }
+            // Only now: releasing this is what makes the strip focusable again, and it must not
+            // happen while focus is still in mid-air.
             isApplyingRefresh = false
         }
         // Stepping out of the banner is the safe moment to swap in anything that arrived while
