@@ -229,8 +229,11 @@ private struct SubscriptionTile: View {
         // Looks the picture up the first time the tile is drawn, if nothing knows it yet. The
         // store dedupes by channel and remembers the answer across launches, so a screenful of
         // tiles costs one request per channel, once ever.
+        // Asked against the picture the tile would actually draw, not just the one the list came
+        // with: a channel the feed has already looked up is known here too, and starting a task
+        // per tile to discover that is work a screenful of them doesn't need to do.
         .task(id: channel.id) {
-            guard channel.avatarURL == nil else { return }
+            guard avatarURL == nil else { return }
             await channelAvatars.resolve(channelID: channel.id)
         }
         // The button's label is a stack of three views, which VoiceOver and the UI tests would
