@@ -37,8 +37,9 @@ struct SubscriptionsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
 
-    /// Channels in the order YouTube lists them, which is roughly by how much you watch them —
-    /// more useful than alphabetical, and the order the user sees on every other YouTube client.
+    /// Channels in the order `FEchannels` returned them — alphabetical in every response seen so
+    /// far, though nothing promises that. Left exactly as it arrived rather than re-sorted here,
+    /// so the grid matches the list YouTube's own clients show.
     private var channels: [SubscribedChannel] { subscriptions.channels }
 
     /// Six across at 1080p, which puts a comfortable gap between avatars without the names
@@ -162,7 +163,15 @@ struct SubscriptionsView: View {
         defer { isLoading = false }
 
         do {
-            try await subscriptions.reload(using: authStore)
+            let loaded = try await subscriptions.reload(using: authStore)
+            // `false` means nobody is signed in, or the load was called off — neither of which is
+            // an empty subscription list, and the empty copy would be the screen answering a
+            // question it never got an answer to. A cancelled load needs no message: the screen
+            // is being left. Signing out swaps this whole screen for the login one, so in
+            // practice this is the case where the token could not be renewed.
+            if !loaded, !Task.isCancelled, channels.isEmpty {
+                errorMessage = "Your account couldn't be reached."
+            }
         } catch {
             // A cancelled load is the screen being left, not a failure to report.
             if isCancellation(error) { return }
