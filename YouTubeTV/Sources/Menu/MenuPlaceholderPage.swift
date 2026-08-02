@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The screen behind a menu item that hasn't been built yet — Subscriptions, History,
-/// Settings.
+/// The screen behind a menu item that hasn't been built yet — History and Settings.
+/// (Subscriptions is real now: see `SubscriptionsView`.)
 ///
 /// Deliberately not a blank page: each one lays out the shape its real content will take, in
 /// empty outlines. That way the prototype can be judged on the thing being prototyped (does
@@ -59,10 +59,11 @@ struct MenuPlaceholderPage: View {
 
     private var subtitle: String {
         switch section {
-        case .home:
+        // Neither reaches this page — Home is the feed and Subscriptions is its own screen — but
+        // the switch has to be total, and an empty subtitle is the honest answer for a section
+        // that never gets here.
+        case .home, .subscriptions:
             return ""
-        case .subscriptions:
-            return "Every channel you follow, with its picture. Not wired up yet."
         case .history:
             return "Everything you've watched, most recent first. Not wired up yet."
         case .settings:
@@ -73,28 +74,12 @@ struct MenuPlaceholderPage: View {
     @ViewBuilder
     private var skeleton: some View {
         switch section {
-        case .home:
+        case .home, .subscriptions:
             EmptyView()
-        case .subscriptions:
-            channelGrid
         case .history:
             videoGrid
         case .settings:
             settingsList
-        }
-    }
-
-    /// What Subscriptions will be: a picture and a name per channel.
-    private var channelGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 48), count: 6), spacing: 56) {
-            ForEach(0..<12, id: \.self) { _ in
-                VStack(spacing: 16) {
-                    Circle()
-                        .strokeBorder(.white.opacity(0.22), lineWidth: 2)
-                        .frame(width: 140, height: 140)
-                    outline(width: 110, height: 16)
-                }
-            }
         }
     }
 

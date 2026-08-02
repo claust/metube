@@ -16,6 +16,13 @@ final class SubscriptionStore: ObservableObject {
 
     @Published private(set) var channelIDs: Set<String> = []
 
+    /// The same subscriptions with their names and pictures, in the order YouTube listed them,
+    /// for the Subscriptions screen to draw. Not cached to disk, unlike the ids: it is a screen
+    /// the user has to go looking for rather than a label on every card menu, so one request on
+    /// arrival is cheap enough — and it spares the app a stored copy of every channel name that
+    /// would go stale silently.
+    @Published private(set) var channels: [SubscribedChannel] = []
+
     /// Channels with a subscribe/unsubscribe request in flight. The menu disables its toggle for
     /// these, so a double press can't fire the opposite call before the first one lands.
     @Published private(set) var pending: Set<String> = []
@@ -37,6 +44,10 @@ final class SubscriptionStore: ObservableObject {
         self.profileID = profileID
         pending = []
         channelIDs = profileID.map(load(profileID:)) ?? []
+        // Nothing of the list survives a profile switch: it isn't cached, and showing the
+        // previous account's channels while the new one's load is in flight would be a lie the
+        // screen has no way to mark as one.
+        channels = []
     }
 
     func isSubscribed(_ channelID: String) -> Bool { channelIDs.contains(channelID) }
@@ -49,15 +60,27 @@ final class SubscriptionStore: ObservableObject {
     /// loads; failures are silent because a stale label on a menu nobody has opened yet is not
     /// worth an error banner over the feed.
     func refresh(using authStore: AuthStore) async {
-        guard profileID != nil else { return }
-        let loaded = try? await authStore.authorized { token in
-            try await SubscriptionService().loadSubscribedChannelIDs(accessToken: token)
+        _ = try? await reload(using: authStore)
+    }
+
+    /// The same load, for the Subscriptions screen — which, unlike the card menus, is *about*
+    /// this list and so has both a spinner and an error state to put a failure in.
+    ///
+    /// Returns whether the list was replaced: `false` means the request was cancelled or nobody
+    /// is signed in, neither of which is an empty subscription list.
+    @discardableResult
+    func reload(using authStore: AuthStore) async throws -> Bool {
+        guard profileID != nil else { return false }
+        let loaded = try await authStore.authorized { token in
+            try await SubscriptionService().loadSubscriptions(accessToken: token)
         }
         // `authorized` returns nil for "cancelled or signed out", which is not an empty
         // subscription list — writing that through would wipe the cache for no reason.
-        guard let ids = loaded ?? nil else { return }
-        channelIDs = ids
+        guard let listing = loaded else { return false }
+        channelIDs = listing.channelIDs
+        channels = listing.channels
         persist()
+        return true
     }
 
     /// Records a subscription state we learned from somewhere other than the subscription list —
@@ -106,6 +129,11 @@ final class SubscriptionStore: ObservableObject {
         if subscribed {
             return channelIDs.insert(channelID).inserted
         }
+        // Take it off the Subscriptions screen too, so unsubscribing from a channel's own page
+        // and pressing back doesn't land on a list still showing it. The reverse has no
+        // equivalent: subscribing tells us an id and nothing else, and a tile with no name or
+        // picture is worse than one that appears on the next load.
+        channels.removeAll { $0.id == channelID }
         return channelIDs.remove(channelID) != nil
     }
 

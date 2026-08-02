@@ -15,8 +15,9 @@ struct RootView: View {
     @State private var path: [Destination] = []
     @State private var isAddingProfile = false
 
-    /// Which of the left menu's screens is showing. Home is the feed the app has always
-    /// opened on; the rest are prototypes — see `MenuPlaceholderPage`.
+    /// Which of the left menu's screens is showing. Home is the feed the app has always opened
+    /// on, Subscriptions is the channel grid; History and Settings are still outlines — see
+    /// `MenuPlaceholderPage`.
     @State private var section: MenuSection = .home
 
     /// Bumped every time the menu picks a section. The screen it selects answers by taking
@@ -189,7 +190,15 @@ struct RootView: View {
                 .opacity(section == .home ? 1 : 0)
                 .disabled(section != .home)
 
-                if section != .home {
+                switch section {
+                case .home:
+                    EmptyView()
+                case .subscriptions:
+                    SubscriptionsView(
+                        focusRequest: focusRequest,
+                        onOpenChannel: { path.append(.channel(id: $0.id, title: $0.displayName)) }
+                    )
+                case .history, .settings:
                     MenuPlaceholderPage(section: section, focusRequest: focusRequest)
                 }
             }
