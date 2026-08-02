@@ -160,8 +160,10 @@ Neither response names the feed it came from, so the caller has to supply that h
 
 ## CHANNELS AND SUBSCRIPTIONS (TVHTML5 + Bearer token)
 
-**Not yet verified against a live account** — implemented from SmartTube's request shapes for
-the card-menu prototype. Confirm these before treating them as settled.
+The channel page and `FEchannels` are **verified against a live account** (2026-08-02): a
+97-channel account listed all 97, each with its name, avatar and subscriber count. The two
+`subscription/*` mutations below are still only implemented from SmartTube's request shapes —
+confirm those before treating them as settled.
 
 A channel page is just another `browse`: `{"browseId":"UC…"}`, replying with the same
 `sectionListRenderer` → `shelfRenderer` shelves the feeds use, so it needs no separate parser.
@@ -176,8 +178,19 @@ subscribeButtonRenderer.subscribed                  Bool — whether THIS accoun
 `subscribed` is the only per-channel answer available; everything else has to come from the
 subscription list.
 
-- `FEchannels` — browse feed listing every channel the account subscribes to. The app reads the
-  ids straight off it (every `browseEndpoint.browseId` beginning with `UC`).
+- `FEchannels` — browse feed listing every channel the account subscribes to, alphabetically, in
+  one reply (no paging seen at ~100 channels). Read twice, for two different purposes:
+  - **ids**, for the card menus' Subscribe/Unsubscribe labels: every `browseEndpoint.browseId`
+    beginning with `UC`, taken off the whole response. Cannot miss a channel whatever cell shape
+    it arrived in, but is a *broader* read than the cells — a shelf of recommended channels would
+    land in it too, so it is not a list to put on screen.
+  - **cells**, for the Subscriptions screen: name, avatar and subscriber count per channel. The
+    cell shape is not fixed, so `SubscribedChannelParser` accepts `tileRenderer`,
+    `gridChannelRenderer`, `channelRenderer`, `compactChannelRenderer` and `lockupViewModel`, and
+    reads each field by shape rather than by path — the title from whichever title slot the cell
+    has, the avatar from any image in it (a channel cell has no video thumbnail to confuse it
+    with), and the counts by flattening every subtitle fragment and classifying it by what it
+    says.
 - `subscription/subscribe` and `subscription/unsubscribe` — POST `{"channelIds":["UC…"]}`. The
   reply carries only the button's new label and tracking params, so the status code is the
   result.

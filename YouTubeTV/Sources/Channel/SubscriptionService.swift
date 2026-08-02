@@ -27,13 +27,17 @@ struct SubscriptionService {
         )
     }
 
-    /// Every channel the account is subscribed to, as ids.
+    /// Every channel the account is subscribed to: the ids the card menus label themselves from,
+    /// and the named, pictured channels the Subscriptions screen lists.
     ///
     /// `FEchannels` is the "All subscriptions" browse feed — a grid of the user's channels and
     /// nothing else, which is why the ids can be taken from the whole response rather than from
     /// a named container. Anything that isn't channel-shaped is filtered out by the same "UC"
     /// prefix test the cell parser uses.
-    func loadSubscribedChannelIDs(accessToken: String) async throws -> Set<String> {
+    ///
+    /// Both halves come out of the one request, since they are two readings of the same reply —
+    /// see `SubscriptionListing` for why they are read by different routes.
+    func loadSubscriptions(accessToken: String) async throws -> SubscriptionListing {
         let json = try await InnerTubeClient.post(
             endpoint: "browse",
             client: .tv,
@@ -46,10 +50,23 @@ struct SubscriptionService {
             ids.insert(id)
         }
 
+        // A response whose cells this app doesn't recognise still yields ids, so fall back to
+        // listing those bare: a grid of pictures looked up per channel, with the names filled in
+        // by the pages behind them, beats a screen that says you subscribe to nothing. Only when
+        // there is nothing at all to fall back from — the ids are a broader read than the cells
+        // (a "recommended channels" shelf links channels too), so topping up a list that parsed
+        // fine would put channels on the screen the account doesn't follow.
+        let parsed = SubscribedChannelParser.channels(in: json)
+        let channels = parsed.isEmpty ? ids.sorted().map { SubscribedChannel(id: $0) } : parsed
+
         #if DEBUG
-        print("[SubscriptionService] FEchannels: \(ids.count) subscribed channels")
+        print(
+            "[SubscriptionService] FEchannels: \(ids.count) subscribed channels"
+                + " | \(channels.count) parsed as cells"
+                + " | \(channels.filter { $0.title.isEmpty }.count) unnamed"
+        )
         #endif
 
-        return ids
+        return SubscriptionListing(channelIDs: ids, channels: channels)
     }
 }

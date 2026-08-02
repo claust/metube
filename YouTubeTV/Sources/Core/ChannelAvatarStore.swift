@@ -58,11 +58,23 @@ final class ChannelAvatarStore: ObservableObject {
         return byName[Self.key(item.author)]
     }
 
+    /// The picture for a channel known by its id alone — the Subscriptions screen's tiles, which
+    /// have no video cell to have carried one.
+    func url(forChannel channelID: String) -> URL? { byID[channelID] }
+
     /// Fetches this video's channel picture if it isn't known yet. Safe to call from every
     /// card on every appearance: known channels, in-flight ones and ones already tried return
     /// immediately.
     func resolve(_ item: VideoItem) async {
+        // The name-keyed half of the cache counts as knowing it, which is why this is asked
+        // before the id — a channel pictured by the Subscriptions feed costs no lookup at all.
         guard url(for: item) == nil, let id = item.channelID else { return }
+        await resolve(channelID: id)
+    }
+
+    /// The same lookup for a bare channel id. Equally safe to call on every redraw.
+    func resolve(channelID id: String) async {
+        guard byID[id] == nil else { return }
         guard !inFlight.contains(id), !failed.contains(id) else { return }
 
         inFlight.insert(id)
