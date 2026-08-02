@@ -60,7 +60,7 @@ final class SubscriptionStore: ObservableObject {
     /// loads; failures are silent because a stale label on a menu nobody has opened yet is not
     /// worth an error banner over the feed.
     func refresh(using authStore: AuthStore) async {
-        try? await reload(using: authStore)
+        _ = try? await reload(using: authStore)
     }
 
     /// The same load, for the Subscriptions screen — which, unlike the card menus, is *about*
