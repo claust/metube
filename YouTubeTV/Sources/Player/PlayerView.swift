@@ -10,6 +10,7 @@ struct PlayerView: View {
     var onClose: () -> Void
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
+    @EnvironmentObject private var watchHistory: WatchHistoryStore
 
     @State private var player: AVPlayer?
     @StateObject private var skipper = SponsorBlockSkipper()
@@ -156,6 +157,10 @@ struct PlayerView: View {
 
                 switch await awaitPlaybackStart(of: avPlayer) {
                 case .started:
+                    // Frames are moving, so this is a video that was watched — which is the point
+                    // the History screen's list is written from. A card that never resolved a
+                    // playable stream doesn't belong on it.
+                    watchHistory.record(video)
                     // Deliberately after playback has started, and not raced against the stream
                     // resolution with `async let`: SponsorBlock is a nice-to-have, and waiting on
                     // a third-party server before showing the first frame would trade a certain

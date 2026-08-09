@@ -29,14 +29,21 @@ final class AuthStore: ObservableObject {
     /// through statics so those changes go through the same object the app is showing, which is
     /// what lets it drop writes that a deletion has overtaken.
     private let watchProgress: WatchProgressStore
+    /// Told the same things, for the same reason: the History screen is reading this object, so a
+    /// profile's list has to be moved or dropped on the instance that is on screen.
+    private let watchHistory: WatchHistoryStore
     private let profilesKey = "yt.profiles"
     private let activeProfileKey = "yt.activeProfile"
 
     var isLoggedIn: Bool { accessToken != nil }
     var activeProfile: Profile? { profiles.first { $0.id == activeProfileID } }
 
-    init(watchProgress: WatchProgressStore, defaults: UserDefaults = .standard) {
+    init(
+        watchProgress: WatchProgressStore, watchHistory: WatchHistoryStore,
+        defaults: UserDefaults = .standard
+    ) {
         self.watchProgress = watchProgress
+        self.watchHistory = watchHistory
         self.defaults = defaults
 
         profiles = Self.decodeProfiles(defaults.data(forKey: profilesKey))
@@ -98,6 +105,10 @@ final class AuthStore: ObservableObject {
     /// it behind.
     func signOut(_ profileID: String) {
         watchProgress.discardEntries(for: profileID)
+        // The list of what was watched on this TV goes with it. Unlike watch progress there is no
+        // backup of it anywhere, which is the point: it never leaves the device, so signing out is
+        // the end of it.
+        watchHistory.discardEntries(for: profileID)
         // The backup on the server stays — signing back in is meant to restore it — but the
         // credential that reaches it must not outlive the sign-out. Left behind, the device
         // would keep read and write access to that account's history with nobody signed in.
@@ -304,6 +315,7 @@ final class AuthStore: ObservableObject {
         accessTokens[newID] = accessTokens.removeValue(forKey: profile.id)
         refreshTokens[newID] = refreshTokens.removeValue(forKey: profile.id)
         watchProgress.moveEntries(from: profile.id, to: newID)
+        watchHistory.moveEntries(from: profile.id, to: newID)
 
         profiles.removeAll { $0.id == profile.id }
         return newID

@@ -24,6 +24,12 @@ enum Metrics {
 /// which both shapes put in the same place, is the only thing over the image.
 struct VideoCard: View {
     let item: VideoItem
+    /// How wide to draw the card. The feed's rows take the default; History lays its cards out in
+    /// a grid and hands each one the width of a column, which depends on how much of the screen
+    /// is left beside the menu — so the card can't assume it.
+    ///
+    /// Ignored for a Short, whose tile is a fixed portrait size wherever it appears.
+    var width: CGFloat = Metrics.cardWidth
     /// Holding Select on the focused card. The screen showing the cards puts a menu up —
     /// go to channel, subscribe or unsubscribe. Cards that aren't given one just play.
     var onLongPress: (() -> Void)?
@@ -87,7 +93,7 @@ struct VideoCard: View {
             // Fix the width here rather than outside the button. A wrapping title reports an
             // ideal width far wider than the card, and an outer frame doesn't clamp it — the
             // caption spilled past the thumbnail and dragged the panel out with it.
-            .frame(width: item.isShort ? Metrics.shortCardWidth : Metrics.cardWidth)
+            .frame(width: item.isShort ? Metrics.shortCardWidth : width)
             // Hung off the card's own bottom-right corner and trimmed by the clip below to about
             // three quarters of the circle.
             //
@@ -335,7 +341,7 @@ struct VideoCard: View {
         // The title box already keeps its two lines; the minimum height holds the rest of the
         // caption open too, so a card missing a channel or stats line doesn't sit shorter than its
         // neighbours and leave the row's focus panels ragged.
-        .frame(width: Metrics.cardWidth, alignment: .topLeading)
+        .frame(width: width, alignment: .topLeading)
         .frame(minHeight: 122, alignment: .topLeading)
         .padding(.top, 12)
         .padding(.bottom, 4)

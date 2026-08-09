@@ -32,6 +32,7 @@ keeps watch progress in sync across reinstalls and boxes.
 | **Shorts** | Their own row and their own portrait tile, lifted out of the shelves YouTube mixes them into. |
 | **SponsorBlock** | In-video sponsor reads skipped automatically, looked up by a 4-character hash prefix so the videoId never leaves the device. |
 | **Channels** | Hold Select on a card for the channel screen and subscribe/unsubscribe. |
+| **History** | Everything already watched, most recent first, built from the synced watch progress — plus the account's history from its other clients. |
 | **Top Shelf** | The first two videos of your feed on the tvOS home screen, deep-linking straight into the player. |
 | **Watch-progress sync** | Resume positions backed up to a self-hosted Appwrite — with no second login to type on a remote. |
 

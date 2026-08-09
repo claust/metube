@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The screen behind a menu item that hasn't been built yet — History and Settings.
-/// (Subscriptions is real now: see `SubscriptionsView`.)
+/// The screen behind a menu item that hasn't been built yet — Settings, now the only one.
+/// (Subscriptions and History are real: see `SubscriptionsView` and `HistoryView`.)
 ///
-/// Deliberately not a blank page: each one lays out the shape its real content will take, in
-/// empty outlines. That way the prototype can be judged on the thing being prototyped (does
-/// navigating left to the menu and picking a screen feel right?) without inventing channels or
-/// watch history to fill it with, which would be worse than showing nothing — a page of made-up
-/// data is indistinguishable from a page that works.
+/// Deliberately not a blank page: it lays out the shape its real content will take, in empty
+/// outlines. That way the prototype can be judged on the thing being prototyped (does navigating
+/// left to the menu and picking a screen feel right?) without inventing settings to fill it with,
+/// which would be worse than showing nothing — a page of made-up data is indistinguishable from a
+/// page that works.
 struct MenuPlaceholderPage: View {
     let section: MenuSection
 
@@ -59,13 +59,11 @@ struct MenuPlaceholderPage: View {
 
     private var subtitle: String {
         switch section {
-        // Neither reaches this page — Home is the feed and Subscriptions is its own screen — but
-        // the switch has to be total, and an empty subtitle is the honest answer for a section
-        // that never gets here.
-        case .home, .subscriptions:
+        // None of the three reaches this page — Home is the feed, and Subscriptions and History
+        // are their own screens — but the switch has to be total, and an empty subtitle is the
+        // honest answer for a section that never gets here.
+        case .home, .subscriptions, .history:
             return ""
-        case .history:
-            return "Everything you've watched, most recent first. Not wired up yet."
         case .settings:
             return "Playback, profiles and what shows on Home. Not wired up yet."
         }
@@ -74,27 +72,10 @@ struct MenuPlaceholderPage: View {
     @ViewBuilder
     private var skeleton: some View {
         switch section {
-        case .home, .subscriptions:
+        case .home, .subscriptions, .history:
             EmptyView()
-        case .history:
-            videoGrid
         case .settings:
             settingsList
-        }
-    }
-
-    /// What History will be: the same cards the feed draws, in a grid rather than a row.
-    private var videoGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 40), count: 4), spacing: 48) {
-            ForEach(0..<8, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 14) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(.white.opacity(0.22), lineWidth: 2)
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                    outline(width: 240, height: 16)
-                    outline(width: 160, height: 14)
-                }
-            }
         }
     }
 

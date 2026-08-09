@@ -10,14 +10,15 @@ struct RootView: View {
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var watchProgressSync: WatchProgressSync
     @EnvironmentObject private var subscriptions: SubscriptionStore
+    @EnvironmentObject private var watchHistory: WatchHistoryStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedVideo: VideoItem?
     @State private var path: [Destination] = []
     @State private var isAddingProfile = false
 
     /// Which of the left menu's screens is showing. Home is the feed the app has always opened
-    /// on, Subscriptions is the channel grid; History and Settings are still outlines — see
-    /// `MenuPlaceholderPage`.
+    /// on, Subscriptions is the channel grid, History is what has been watched; Settings is still
+    /// an outline — see `MenuPlaceholderPage`.
     @State private var section: MenuSection = .home
 
     /// Bumped every time the menu picks a section. The screen it selects answers by taking
@@ -83,6 +84,9 @@ struct RootView: View {
             // Subscriptions belong to an account just as history does, so the card menus follow
             // the active profile rather than showing the previous one's Subscribe/Unsubscribe.
             subscriptions.activate(profileID: profileID)
+            // And so does what has been watched on this TV — the History screen shows the profile
+            // in the bar, not everything the box has ever played.
+            watchHistory.activate(profileID: profileID)
             // Nobody is signed in any more, so the tiles on the home screen would be the last
             // account's recommendations sitting there for whoever walks past.
             if profileID == nil {
@@ -204,7 +208,13 @@ struct RootView: View {
                         focusRequest: focusRequest,
                         onOpenChannel: { path.append(.channel(id: $0.id, title: $0.displayName)) }
                     )
-                case .history, .settings:
+                case .history:
+                    HistoryView(
+                        focusRequest: focusRequest,
+                        onSelectVideo: { selectedVideo = $0 },
+                        onOpenChannel: openChannel
+                    )
+                case .settings:
                     MenuPlaceholderPage(section: section, focusRequest: focusRequest)
                 }
             }

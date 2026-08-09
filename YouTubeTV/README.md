@@ -93,6 +93,37 @@ gets — the app keeps progress on the device and uploads nothing. Neither value
 credential, but both point at somebody's personal server, so committing them would mean
 anyone who built this repo sent their viewing history there.
 
+## History
+
+The menu's **History** screen lists what has already been watched, most recent first, as a grid
+of the same cards the feed draws — press one and it opens in the player, resuming where it was
+left.
+
+The list comes from **watch progress** — the same per-video position, duration and date the
+player writes, that syncs to the backend and comes back on a fresh install or a second Apple TV.
+That is the app's real record of what has been watched, which is also why every card here carries
+the red progress line: the page is drawn from the thing that line comes from. Videos played here
+too briefly to record a position (under ten seconds) are kept alongside it by `WatchHistoryStore`.
+
+What watch progress does *not* carry is the videos themselves — it is ids and dates. So
+`WatchHistoryStore` holds a card per video (title, channel, artwork, running time), filled in
+from three places: the video the player just started, the account's history list, and
+`VideoMetadataService` for whatever ids are left. That last one is `player` on the VISIONOS
+client — the same call the player already makes, minus the streaming half — one request per
+video, four at a time, and the answers are kept for good. A history restored from the backend
+therefore costs a burst of lookups on the first visit and nothing on later ones.
+
+Folded into the same list is YouTube's own `FEhistory` (~15 videos, no paging) — the only sight
+the app gets of what was watched on a phone or a laptop, since nothing played here ever reaches
+it (resolving a stream ourselves tells YouTube nothing about it). Those videos carry no
+timestamps, only YouTube's ordering, so they are *placed* rather than dated: an undated video
+sits directly below the most recent video the app does have a time for, keeping YouTube's
+sequence. It never claims to be newer than something known to be newer, and one list stays one
+list.
+
+The cards are never uploaded, unlike the progress behind them: they are a local copy of what some
+feed already said, pruned to what the page still draws, and signing the profile out deletes them.
+
 ## Refreshing the feed
 
 The feed is checked for new videos in the background — when the app comes back to the
@@ -454,6 +485,7 @@ U+16CA points the wrong way and U+16CC is barely more than a tick.
 - `Sources/Auth` — OAuth device-activation flow, account lookup + `LoginView`
 - `Sources/Feed` — TV `browse` (Home) parsing + grid `HomeView`
 - `Sources/Search` — TV `search` + `SearchView` (reached from the icon in the Home header)
+- `Sources/History` — the menu's `HistoryView`, its card store, and the by-id video lookup
 - `Sources/UI` — the video card and layout metrics both screens share
 - `Sources/Player` — VISIONOS `player` stream resolve + `AVPlayerViewController` + SponsorBlock skipping
 - `TopShelf/` — the Top Shelf extension; shares only `Sources/Core/TopShelf.swift` with the app
