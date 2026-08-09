@@ -703,29 +703,36 @@ struct NewsBanner: View {
     }
 }
 
-/// Turns a left or right swipe across the remote's touch surface into the same step between
+/// Turns a left or right drag across the remote's touch surface into the same step between
 /// stories that clicking the edge of the pad makes.
 ///
-/// A click arrives as a move command, which `onMoveCommand` picks up. A swipe does not: tvOS
+/// A click arrives as a move command, which `onMoveCommand` picks up. A drag does not: tvOS
 /// hands it to the focus engine as a request to move focus, and the strip is a single focusable
 /// inside its own focus section — so there is nowhere for focus to go and the gesture is dropped
 /// without anything being told about it. Catching it in UIKit is what makes the two ways of
 /// pressing left and right on a Siri Remote do the same thing.
 ///
-/// The recognizers go on the window rather than on this view. Remote touches are indirect: they
+/// A pan rather than a `UISwipeGestureRecognizer`, which is what this was first written with:
+/// that one only fires for a flick, so a thumb dragged deliberately across the pad — and a drag
+/// across the simulator's remote, which is the only way to swipe there at all — produced nothing.
+/// A pan sees both, at the price of having to say for itself how far is far enough: hence
+/// `stepDistance`, and the requirement that the movement be more sideways than not, so scrolling
+/// an article doesn't also change the story underneath it.
+///
+/// The recognizer goes on the window rather than on this view. Remote touches are indirect: they
 /// are delivered to whatever holds focus and travel up its responder chain, so only a recognizer
 /// on an ancestor of the focused view ever sees them, and this view is a backdrop beside the
-/// strip rather than above it. Being window-wide is safe because it is temporary — the
-/// recognizers exist only while the banner holds focus, and come straight off it again, so a
-/// swipe anywhere else in the app is never routed through here.
+/// strip rather than above it. Being window-wide is safe because it is temporary — it exists only
+/// while the banner holds focus, and comes straight off again, so a drag anywhere else in the app
+/// is never routed through here.
 private struct SwipeCatcher: UIViewRepresentable {
-    /// Whether the swipes should be caught at all — true only while the banner has focus.
+    /// Whether the drags should be caught at all — true only while the banner has focus.
     var isEnabled: Bool
     var onSwipe: (MoveCommandDirection) -> Void
 
     func makeUIView(context: Context) -> HostView {
         let view = HostView()
-        // Nothing to hit: the recognizers live on the window, and an interactive backdrop under
+        // Nothing to hit: the recognizer lives on the window, and an interactive backdrop under
         // the strip would only get in the focus engine's way.
         view.isUserInteractionEnabled = false
         view.onWindowChange = { [coordinator = context.coordinator] window in
@@ -746,7 +753,7 @@ private struct SwipeCatcher: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    /// Reports when it joins or leaves a window, which is the moment the recognizers can be put
+    /// Reports when it joins or leaves a window, which is the moment the recognizer can be put
     /// somewhere the remote's touches actually reach.
     final class HostView: UIView {
         var onWindowChange: (UIWindow?) -> Void = { _ in }
@@ -757,52 +764,71 @@ private struct SwipeCatcher: UIViewRepresentable {
         }
     }
 
-    /// Owns the two recognizers and the window they are currently on.
+    /// Owns the recognizer and the window it is currently on.
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onSwipe: (MoveCommandDirection) -> Void = { _ in }
         /// Set from `updateUIView`, which then calls `attach` — so this is read there rather
         /// than acted on here.
         var isEnabled = false
 
-        private lazy var recognizers: [UISwipeGestureRecognizer] = [
-            recognizer(for: .left), recognizer(for: .right),
-        ]
-        /// The window the recognizers are on, and `nil` when they are on none.
+        /// How far sideways a drag has to travel to mean "next story". Touches on the remote are
+        /// reported against the screen's own coordinates rather than the pad's, so this is a
+        /// distance on a 1920-point line: far enough that a thumb resting on the pad and
+        /// drifting doesn't turn the page, short enough that half a comfortable swipe is already
+        /// past it.
+        private static let stepDistance: CGFloat = 240
+
+        /// How much more sideways than up-and-down a drag has to be to count. Reading an article
+        /// is done by dragging down the pad, and the hand rarely does that in a straight line.
+        private static let horizontalBias: CGFloat = 1.5
+
+        /// Whether this drag has already moved the strip. One story per swipe, however far the
+        /// thumb carries on: the pad is short and the whole of it is only a few multiples of
+        /// `stepDistance`, so stepping per unit travelled turns an ordinary swipe into three or
+        /// four stories at once and overshoots what the user was reaching for.
+        private var hasStepped = false
+
+        private lazy var recognizer: UIPanGestureRecognizer = {
+            let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handle))
+            recognizer.delegate = self
+            return recognizer
+        }()
+
+        /// The window the recognizer is on, and `nil` when it is on none.
         private weak var attached: UIWindow?
 
-        /// Moves the recognizers onto `window`, or takes them off everything when the banner
+        /// Moves the recognizer onto `window`, or takes it off everything when the banner
         /// doesn't have focus. Idempotent: SwiftUI re-runs `updateUIView` for every state change
         /// in the banner, and the ticker changes state constantly.
         func attach(to window: UIWindow?) {
             let target = isEnabled ? window : nil
             guard target !== attached else { return }
-            for recognizer in recognizers {
-                recognizer.view?.removeGestureRecognizer(recognizer)
-                target?.addGestureRecognizer(recognizer)
-            }
+            recognizer.view?.removeGestureRecognizer(recognizer)
+            target?.addGestureRecognizer(recognizer)
             attached = target
         }
 
-        private func recognizer(for direction: UISwipeGestureRecognizer.Direction)
-            -> UISwipeGestureRecognizer
-        {
-            let recognizer = UISwipeGestureRecognizer(target: self, action: #selector(handle))
-            recognizer.direction = direction
-            recognizer.delegate = self
-            return recognizer
-        }
-
-        @objc private func handle(_ recognizer: UISwipeGestureRecognizer) {
+        @objc private func handle(_ recognizer: UIPanGestureRecognizer) {
             guard isEnabled else { return }
-            switch recognizer.direction {
-            case .left: onSwipe(.left)
-            case .right: onSwipe(.right)
-            default: break
+            switch recognizer.state {
+            case .began:
+                hasStepped = false
+                recognizer.setTranslation(.zero, in: recognizer.view)
+            case .changed:
+                guard !hasStepped else { return }
+                let translation = recognizer.translation(in: recognizer.view)
+                guard abs(translation.x) >= Self.stepDistance,
+                    abs(translation.x) > abs(translation.y) * Self.horizontalBias
+                else { return }
+                hasStepped = true
+                onSwipe(translation.x < 0 ? .left : .right)
+            default:
+                hasStepped = false
             }
         }
 
         /// The system's own pan recognizers are already on this window, driving the focus engine.
-        /// Without this they would claim the touch first and the swipe would never be reported.
+        /// Without this they would claim the touch first and the drag would never be reported.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
