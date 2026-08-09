@@ -22,6 +22,10 @@ struct HomeView: View {
     /// Called when the first page has settled, however it went. Until then the shell keeps the
     /// left menu out of the focus engine's reach — see `SideMenu.canTakeFocus`.
     var onLoadFinished: () -> Void = {}
+    /// Called as the news banner takes and gives up focus. The shell answers by holding the left
+    /// menu out of the focus engine's reach for as long as the banner is in use — see
+    /// `isNewsActive`.
+    var onNewsActiveChange: (Bool) -> Void = { _ in }
     /// Bumped when the left menu picks Home. The feed answers by focusing its first card,
     /// which is what shuts the menu — see `SideMenu.onSelect`.
     var focusRequest: Int = 0
@@ -69,6 +73,13 @@ struct HomeView: View {
     @State private var pendingHeadlines: [NewsItem] = []
 
     /// True while the strip is focused or a story is open — see `NewsBanner.onActiveChange`.
+    ///
+    /// Also reported outwards, because the left menu is not this screen's to disable: left and
+    /// right in the banner step between headlines, and the menu sits immediately to the left of
+    /// the strip. The strip's own `onMoveCommand` cannot stop that — a directional press only
+    /// counts as handled when the focus engine has nowhere to send it, and the menu is somewhere.
+    /// So for as long as the banner is in use the menu stops being a place focus can go, and left
+    /// off the first headline wraps round to the last instead of opening the menu.
     @State private var isNewsActive = false
 
     /// True between Menu being pressed in the news panel and focus arriving on the first card.
@@ -279,7 +290,10 @@ struct HomeView: View {
                     NewsBanner(
                         items: headlines,
                         onFeedLockChange: { isFeedScrollLocked = $0 },
-                        onActiveChange: { isNewsActive = $0 },
+                        onActiveChange: {
+                            isNewsActive = $0
+                            onNewsActiveChange($0)
+                        },
                         onDismiss: { isHandingBackFocus = true },
                         canTakeFocus: !isApplyingRefresh
                     )

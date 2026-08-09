@@ -34,6 +34,11 @@ struct RootView: View {
     /// being over the feed rather than beside it.
     @State private var isMenuExpanded = false
 
+    /// True while Home's news banner is in use — see `HomeView.onNewsActiveChange`. Left and
+    /// right in the banner step between headlines, and the menu is what sits to the left of it,
+    /// so it stands down for as long as the banner has focus.
+    @State private var isNewsActive = false
+
     /// Screens reachable from Home. A navigation stack rather than a sheet so the player
     /// cover, attached to the stack, can present over Search too — and so the Menu button
     /// pops back to Home for free, which is what a tvOS user expects.
@@ -160,7 +165,7 @@ struct RootView: View {
         HStack(spacing: 0) {
             SideMenu(
                 section: $section,
-                canTakeFocus: isFeedReady,
+                canTakeFocus: isFeedReady && !isNewsActive,
                 onExpandedChange: { isMenuExpanded = $0 },
                 onSelect: { focusRequest += 1 }
             )
@@ -185,6 +190,7 @@ struct RootView: View {
                     onAddProfile: { isAddingProfile = true },
                     onOpenChannel: openChannel,
                     onLoadFinished: { isFeedReady = true },
+                    onNewsActiveChange: { isNewsActive = $0 },
                     focusRequest: focusRequest
                 )
                 .opacity(section == .home ? 1 : 0)
