@@ -144,8 +144,12 @@ final class WatchHistoryStore: ObservableObject {
         guard profileID != nil else { return }
         var changed = false
         for video in videos where !video.title.isEmpty {
-            let existing = entries[video.id]
-            entries[video.id] = withWatchedAt(existing?.watchedAt, on: Entry(video: video, watchedAt: nil))
+            let card = withWatchedAt(entries[video.id]?.watchedAt, on: Entry(video: video, watchedAt: nil))
+            // A card that says exactly what the stored one says is not a change: the account's
+            // history is re-fetched on every visit, and republishing it would redraw the grid and
+            // rewrite the file for nothing.
+            guard entries[video.id] != card else { continue }
+            entries[video.id] = card
             changed = true
         }
         guard changed else { return }

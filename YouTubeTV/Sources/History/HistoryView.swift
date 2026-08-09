@@ -299,11 +299,14 @@ struct HistoryView: View {
     /// Looks up the videos on this page that nothing has ever described — the watch progress
     /// restored from the backend, mostly, which is ids and dates and nothing else.
     ///
-    /// In display order, a few at a time, and only once per visit: an answer is kept for good
-    /// (see `WatchHistoryStore`), so this is a cost the first visit after a fresh install pays
-    /// and later ones don't. Videos that come back with nothing — deleted, private — are simply
-    /// left as they are; retrying them on every visit would be a request per visit forever, and
-    /// what they'd return is already known.
+    /// In display order, a few at a time, and once per visit: an answer is kept for good (see
+    /// `WatchHistoryStore`), so this is a cost the first visit after a fresh install pays and
+    /// later ones don't.
+    ///
+    /// A lookup that comes back with nothing — a video since deleted or made private — is not
+    /// remembered as a failure, so it is asked about again on the next visit. Deliberately: there
+    /// are only ever a handful of these in a history, and a video that has gone private can come
+    /// back, where a stored "this one is gone" never would.
     @MainActor
     private func resolveMissingCards() async {
         let missing = watched.filter { $0.title.isEmpty }.map(\.id)
