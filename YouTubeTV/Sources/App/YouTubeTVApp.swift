@@ -7,10 +7,11 @@ struct YouTubeTVApp: App {
     @StateObject private var watchProgressSync: WatchProgressSync
     @StateObject private var channelAvatars = ChannelAvatarStore()
     @StateObject private var subscriptions = SubscriptionStore()
+    @StateObject private var watchHistory: WatchHistoryStore
 
-    /// Built here rather than with property initialisers because the two are connected: the
-    /// profile store tells the progress store when a profile's history is migrated, moved or
-    /// deleted, and that has to reach the same instance the views are reading.
+    /// Built here rather than with property initialisers because they are connected: the profile
+    /// store tells the progress store — and the history store — when a profile is migrated, moved
+    /// or deleted, and that has to reach the same instances the views are reading.
     @MainActor
     init() {
         // `RemoteImage` fetches through `URLSession.shared`, so this is what keeps an avatar or
@@ -23,7 +24,10 @@ struct YouTubeTVApp: App {
 
         let watchProgress = WatchProgressStore()
         _watchProgress = StateObject(wrappedValue: watchProgress)
-        _authStore = StateObject(wrappedValue: AuthStore(watchProgress: watchProgress))
+        let watchHistory = WatchHistoryStore()
+        _watchHistory = StateObject(wrappedValue: watchHistory)
+        _authStore = StateObject(
+            wrappedValue: AuthStore(watchProgress: watchProgress, watchHistory: watchHistory))
         // Wraps the same store: it is what the sync uploads from and merges into.
         _watchProgressSync = StateObject(wrappedValue: WatchProgressSync(store: watchProgress))
     }
@@ -36,6 +40,7 @@ struct YouTubeTVApp: App {
                 .environmentObject(watchProgressSync)
                 .environmentObject(channelAvatars)
                 .environmentObject(subscriptions)
+                .environmentObject(watchHistory)
         }
     }
 }

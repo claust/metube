@@ -41,7 +41,7 @@ help:
 	@echo "  test        Run the UI tests on the Apple TV simulator"
 	@echo "  deploy      Build, install and launch on a paired Apple TV"
 	@echo "  testflight  Archive and upload to TestFlight (see README)"
-	@echo "  screenshot  Capture the booted simulator (OUT=<path> to choose the file)"
+	@echo "  screenshot  Capture the target simulator (OUT=<path> to choose the file)"
 	@echo "  remote      Drive the simulator remote, e.g. make remote ARGS='right 2 --shot'"
 	@echo "  format      Reformat Swift sources in place with swift-format"
 	@echo "  lint        SwiftLint --strict"
@@ -75,9 +75,13 @@ run: generate
 	open -a Simulator
 	set -o pipefail; xcodebuild build -project "$(PROJECT)" -scheme "$(SCHEME)" \
 		-destination '$(TV_DESTINATION)' -derivedDataPath "$(DERIVED)" | $(BEAUTIFY)
-	xcrun simctl install booted "$(DERIVED)/Build/Products/Debug-appletvsimulator/$(APP_NAME).app"
-	xcrun simctl terminate booted "$(BUNDLE_ID)" 2>/dev/null || true
-	xcrun simctl launch booted "$(BUNDLE_ID)" $(ARGS)
+	@# By name, not `booted`: with a second simulator up — an Apple TV A left running
+	@# beside the B this was asked for — `booted` is ambiguous, and simctl picks one of
+	@# them. That installs the build onto a simulator nobody is looking at, which reads
+	@# as the change simply not being there.
+	xcrun simctl install "$(TV_SIMULATOR)" "$(DERIVED)/Build/Products/Debug-appletvsimulator/$(APP_NAME).app"
+	xcrun simctl terminate "$(TV_SIMULATOR)" "$(BUNDLE_ID)" 2>/dev/null || true
+	xcrun simctl launch "$(TV_SIMULATOR)" "$(BUNDLE_ID)" $(ARGS)
 
 # Run the UI tests (UITests/, driven through XCUIRemote) on the simulator.
 test: generate
@@ -125,11 +129,12 @@ testflight-validate:
 archive:
 	@./Scripts/testflight.sh --archive
 
-# Screenshot the booted simulator. tvOS has two displays and simctl picks the
-# TVOut one on its own. Override the destination with OUT=<path>.
+# Screenshot the target simulator (TV_SIMULATOR, as everything else here). tvOS
+# has two displays and simctl picks the TVOut one on its own. Override the
+# destination with OUT=<path>.
 OUT ?= /tmp/youtubetv-screenshot.png
 screenshot:
-	xcrun simctl io booted screenshot "$(OUT)"
+	xcrun simctl io "$(TV_SIMULATOR)" screenshot "$(OUT)"
 
 # Drive the Siri Remote in the simulator — see Scripts/tvremote and the
 # "Drive the simulator remote" section of README.md.
