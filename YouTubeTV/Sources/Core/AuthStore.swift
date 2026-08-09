@@ -19,6 +19,10 @@ final class AuthStore: ObservableObject {
     /// instant, and re-reading the Keychain on each switch would make it a disk round-trip.
     private var accessTokens: [String: String] = [:]
     private var refreshTokens: [String: String] = [:]
+    /// Profiles whose Keychain read failed rather than came back empty. Their credentials are
+    /// unknown, not gone, so nothing may discard the profile — or the tokens themselves — on
+    /// account of the missing entry.
+    private var unreadableCredentials: Set<String> = []
 
     private let defaults: UserDefaults
     /// Told when a profile's history is migrated, moved or deleted. Held rather than reached
@@ -41,7 +45,14 @@ final class AuthStore: ObservableObject {
 
         // A profile whose Keychain entry has gone (restored backup, Keychain reset) can't be
         // signed in as, and an avatar that fails on every press is worse than no avatar.
-        let usable = profiles.filter { accessTokens[$0.id] != nil }
+        //
+        // Only once the Keychain has actually said so, though. A read that fails outright says
+        // nothing about whether the credential is still there, and pruning on it would write the
+        // shortened list back over the real one — costing the user every account for good over a
+        // failure the next launch might not even repeat.
+        let usable = profiles.filter {
+            accessTokens[$0.id] != nil || unreadableCredentials.contains($0.id)
+        }
         let pruned = usable.count != profiles.count
         profiles = usable
 
@@ -101,6 +112,7 @@ final class AuthStore: ObservableObject {
         profiles.removeAll { $0.id == profileID }
         accessTokens[profileID] = nil
         refreshTokens[profileID] = nil
+        unreadableCredentials.remove(profileID)
         KeychainStore.delete(accessKey(profileID))
         KeychainStore.delete(refreshKey(profileID))
         saveProfiles()
@@ -151,14 +163,35 @@ final class AuthStore: ObservableObject {
     /// refused — there is no later attempt that would go any better.
     private struct MissingRefreshToken: Error {}
 
+    /// The Keychain wouldn't say what a profile's credentials are. Unlike a missing refresh
+    /// token this is not final, so it must never sign anyone out: the very next read may work.
+    private struct UnreadableCredentials: Error {}
+
     /// The token exchange on its own, leaving a profile that fails it in place. Used where the
     /// refresh is incidental — filling in an avatar is not worth signing someone out over, and
     /// a transient failure there would take the profile with it.
     private func renewTokens(for profileID: String) async throws {
-        guard let refreshToken = refreshTokens[profileID] else { throw MissingRefreshToken() }
+        let refreshToken = try refreshToken(for: profileID)
         store(
             tokens: try await DeviceAuthService().refreshTokens(refreshToken: refreshToken),
             for: profileID)
+    }
+
+    /// The token to renew with, retrying the Keychain when the launch-time read of this profile
+    /// failed — which doubles as the recovery path, picking the session back up without the user
+    /// signing in again if the Keychain has since become readable.
+    ///
+    /// Reports `MissingRefreshToken` — the answer `refresh` signs a profile out over — only once
+    /// the Keychain has answered and had nothing. While it is still refusing to say, the profile
+    /// is unrenewable but very much not dead.
+    private func refreshToken(for profileID: String) throws -> String {
+        if let token = refreshTokens[profileID] { return token }
+        guard unreadableCredentials.contains(profileID) else { throw MissingRefreshToken() }
+
+        loadTokens(for: profileID)
+        if let token = refreshTokens[profileID] { return token }
+        if unreadableCredentials.contains(profileID) { throw UnreadableCredentials() }
+        throw MissingRefreshToken()
     }
 
     private func store(tokens: DeviceAuthService.Tokens, for profileID: String) {
@@ -173,10 +206,32 @@ final class AuthStore: ObservableObject {
     }
 
     private func loadTokens() {
-        for profile in profiles {
-            accessTokens[profile.id] = KeychainStore.get(accessKey(profile.id))
-            refreshTokens[profile.id] = KeychainStore.get(refreshKey(profile.id))
+        for profile in profiles { loadTokens(for: profile.id) }
+    }
+
+    /// Reads one profile's tokens into memory, recording whether the Keychain answered at all: a
+    /// token left nil by a successful lookup is genuinely absent, one left nil by a failed lookup
+    /// merely unread. A failed lookup leaves whatever is already in memory alone.
+    private func loadTokens(for profileID: String) {
+        var unreadable = false
+        switch KeychainStore.lookup(accessKey(profileID)) {
+        case .found(let token): accessTokens[profileID] = token
+        case .missing: accessTokens[profileID] = nil
+        case .failed: unreadable = true
         }
+        switch KeychainStore.lookup(refreshKey(profileID)) {
+        case .found(let token): refreshTokens[profileID] = token
+        case .missing: refreshTokens[profileID] = nil
+        case .failed: unreadable = true
+        }
+
+        if unreadable {
+            unreadableCredentials.insert(profileID)
+        } else {
+            unreadableCredentials.remove(profileID)
+        }
+        // Re-reading is also how a profile recovers mid-session, so publish what it found.
+        if profileID == activeProfileID { accessToken = accessTokens[profileID] }
     }
 
     private func accessKey(_ profileID: String) -> String { "yt.\(profileID).accessToken" }
@@ -225,17 +280,27 @@ final class AuthStore: ObservableObject {
 
     /// Moves a profile's credentials and watch history onto its account-derived id, and returns
     /// the id it now lives under. Declines — returning the id unchanged — when the profile is
-    /// already there, or when another profile holds the derived id and moving would clobber it.
+    /// already there, when another profile holds the derived id and moving would clobber it, or
+    /// while the Keychain won't say what this profile's credentials are: the move deletes the
+    /// old entries, so carrying out a move over an unreadable token would destroy it. There is
+    /// no hurry, and the next launch can move it once the Keychain is answering again.
     private func adoptDerivedID(for profile: Profile, accountKey: String) -> String {
         let newID = Profile.id(for: accountKey)
-        guard newID != profile.id, !profiles.contains(where: { $0.id == newID }) else {
+        guard newID != profile.id, !profiles.contains(where: { $0.id == newID }),
+            !unreadableCredentials.contains(profile.id)
+        else {
             return profile.id
         }
 
-        for (old, new) in [(accessKey(profile.id), accessKey(newID)), (refreshKey(profile.id), refreshKey(newID))] {
-            KeychainStore.set(KeychainStore.get(old), for: new)
-            KeychainStore.delete(old)
+        // From memory rather than re-read: these are the same values, and a read that failed
+        // here would be taken for an absent token and delete the real one on its way past.
+        for (key, token) in [
+            (accessKey(newID), accessTokens[profile.id]), (refreshKey(newID), refreshTokens[profile.id]),
+        ] {
+            KeychainStore.set(token, for: key)
         }
+        KeychainStore.delete(accessKey(profile.id))
+        KeychainStore.delete(refreshKey(profile.id))
         accessTokens[newID] = accessTokens.removeValue(forKey: profile.id)
         refreshTokens[newID] = refreshTokens.removeValue(forKey: profile.id)
         watchProgress.moveEntries(from: profile.id, to: newID)

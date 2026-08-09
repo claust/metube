@@ -45,7 +45,18 @@ enum KeychainStore {
         #endif
     }
 
-    static func get(_ account: String) -> String? {
+    /// What a read found. A lookup can fail without saying anything about whether the item is
+    /// there — the keybag not being ready yet, an entitlement upset by an app update — and a
+    /// caller that treats a nil as absence would act on a credential that hasn't gone anywhere.
+    enum Lookup: Equatable {
+        case found(String)
+        /// The Keychain answered, and there is no such item.
+        case missing
+        /// The lookup itself failed. Whether the item exists is unknown.
+        case failed(OSStatus)
+    }
+
+    static func lookup(_ account: String) -> Lookup {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -54,10 +65,29 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-            let data = result as? Data
-        else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            // Everything here is written as UTF-8 by `set`, so an item that won't decode is a
+            // corrupt value rather than a failed read: report it as absent, to be replaced.
+            guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
+                return .missing
+            }
+            return .found(value)
+        case errSecItemNotFound:
+            return .missing
+        default:
+            log(status, op: "read", account: account)
+            return .failed(status)
+        }
+    }
+
+    /// The stored value, with "not there" and "couldn't tell" both coming back as nil. For
+    /// callers the difference doesn't matter to; anything that *discards* something on a nil
+    /// wants `lookup` instead.
+    static func get(_ account: String) -> String? {
+        guard case .found(let value) = lookup(account) else { return nil }
+        return value
     }
 
     static func delete(_ account: String) {
