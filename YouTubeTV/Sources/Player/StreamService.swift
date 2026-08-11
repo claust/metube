@@ -35,6 +35,23 @@ struct ResolvedStream {
     let userAgent: String
     /// True for an HLS multivariant playlist (adaptive), false for a single progressive file.
     let isAdaptive: Bool
+    /// Language tag of the video's own audio — `en-US` for a video shot in English — or nil when
+    /// there is nothing to choose: every video YouTube hasn't dubbed, and every progressive
+    /// stream, whose single track is muxed in.
+    ///
+    /// Needed because the HLS manifest for a dubbed video does not carry this. YouTube auto-dubs
+    /// into a dozen languages, lists the renditions alphabetically by language code with the
+    /// original appended *last*, and marks every one of them `DEFAULT=NO` — the API knows which is
+    /// the original (`audioTrack.audioIsDefault`) but that fact does not survive into the playlist.
+    /// With no default declared and no rendition matching the Apple TV's language, AVFoundation
+    /// falls back to the first autoselectable one, which is whichever dub sorts first alphabetically
+    /// by language code. See `reference/INNERTUBE.md` and `PlayerView.selectAudioLanguage`.
+    ///
+    /// `audioIsDefault` marks the original rather than whatever suits the request's `hl`: verified
+    /// against four videos with non-English originals (three German, one Spanish), each requested
+    /// with `hl=en` and each carrying an English dub, where the flag stayed on the original every
+    /// time. Worth re-checking if the app ever sends an `hl` other than `en`.
+    let originalAudioLanguage: String?
 }
 
 /// Resolves an AVPlayer-ready stream for a videoId.
@@ -158,7 +175,8 @@ struct StreamService {
         {
             return .stream(
                 ResolvedStream(
-                    url: url, client: client, userAgent: client.userAgent, isAdaptive: true))
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: true,
+                    originalAudioLanguage: originalAudioLanguage(in: json)))
         }
 
         // 2) Progressive (muxed audio+video) formats under streamingData.formats.
@@ -175,7 +193,8 @@ struct StreamService {
         {
             return .stream(
                 ResolvedStream(
-                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false))
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false,
+                    originalAudioLanguage: nil))
         }
 
         // Otherwise the first progressive MP4 that yields a usable url — a malformed url on one
@@ -187,7 +206,8 @@ struct StreamService {
         {
             return .stream(
                 ResolvedStream(
-                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false))
+                    url: url, client: client, userAgent: client.userAgent, isAdaptive: false,
+                    originalAudioLanguage: nil))
         }
 
         // Playable, but this client returned nothing we can use — typically SABR-only, where
@@ -215,6 +235,32 @@ struct StreamService {
     }
 
     // MARK: - Helpers
+
+    /// The language tag of the track YouTube considers this video's own, from
+    /// `adaptiveFormats[].audioTrack`.
+    ///
+    /// `audioTrack` is present only once a video has been dubbed; an undubbed video has no
+    /// `audioTrack` on any format and this returns nil, which is correct — there is only one
+    /// track and nothing to select. `id` reads `en-US.4`, the tag followed by a track number, and
+    /// only the tag is wanted: it is what the HLS rendition's `LANGUAGE` attribute carries.
+    ///
+    /// `adaptiveFormats` is otherwise unused for playback (see the note on `StreamService`), and
+    /// still is — this reads one field off it rather than taking a stream from it.
+    private func originalAudioLanguage(in json: [String: Any]) -> String? {
+        let formats =
+            (json.value(at: "streamingData/adaptiveFormats") as? [Any])?
+            .compactMap { $0 as? [String: Any] } ?? []
+
+        for format in formats {
+            guard let track = format["audioTrack"] as? [String: Any],
+                track["audioIsDefault"] as? Bool == true,
+                let id = track["id"] as? String
+            else { continue }
+            // `split` drops empty subsequences, so `first` is either nil or non-empty.
+            return id.split(separator: ".").first.map(String.init)
+        }
+        return nil
+    }
 
     private func usableURL(from format: [String: Any]) -> URL? {
         guard let s = format["url"] as? String, !s.isEmpty,
