@@ -310,7 +310,33 @@ Response:
   audio for us, and silently ignores the VP9 variants it cannot decode.
 - `streamingData.adaptiveFormats[*]` — 32 video/audio-only formats, all with a plain `url`,
   **no `signatureCipher` and no `n` throttle param**, and no byte-range restriction (any `Range`,
-  or none, returns 200/206). Not used by the app; see the codec note below for why.
+  or none, returns 200/206). No stream is ever taken from here; see the codec note below for why.
+  One field off it is read — `audioTrack`, below.
+
+### Dubbed audio: the original track is only nameable from the API
+VERIFIED 2026-08-11. A video YouTube has auto-dubbed carries one audio rendition per language, and
+the HLS manifest is no help in telling them apart:
+
+- Renditions are ordered **alphabetically by language code, with the original appended last**.
+- **Every one of them is `DEFAULT=NO`**, and all are `AUTOSELECT=YES`.
+
+So an AVFoundation client whose device language matches none of them — Danish matches nothing
+YouTube dubs into — falls back to the first autoselectable rendition, i.e. whichever dub sorts
+first. Observed on `tDMrb9BZGtQ` (English original, dubbed into de/es/fr/hi/id/it/pt): eight
+renditions, `de-DE` first, `en-US` last, all `DEFAULT=NO`. youtube.com is unaffected because its
+player reads the API rather than relying on the playlist.
+
+`adaptiveFormats[*].audioTrack` is where the fact survives:
+
+```json
+{ "displayName": "English (US) original", "id": "en-US.4", "audioIsDefault": true }
+```
+
+`audioTrack` is absent entirely on an undubbed video. `id` is the language tag plus a track number;
+originals were seen ending `.4` and dubs `.10`, but that is not relied on. **`audioIsDefault` marks
+the video's own language, not one chosen to suit the request's `hl`** — checked against four videos
+with non-English originals (three German, one Spanish), each requested with `hl=en` and each
+carrying an English dub; the flag stayed on the original every time. Re-check if `hl` ever changes.
 
 ### Why not 4K
 The HLS ladder and the adaptive formats both go to 2160p60, but above 1080p YouTube publishes only

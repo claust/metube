@@ -215,7 +215,11 @@ struct PlayerView: View {
                 AVURLAssetHTTPUserAgentKey: stream.userAgent
             ])
         let item = AVPlayerItem(asset: asset)
-        let avPlayer = AVPlayer(playerItem: item)
+        // Criteria before attaching the item to the player, so there is no window — however
+        // theoretical — in which the item could reach ready-to-play with no audio preference set.
+        let avPlayer = AVPlayer()
+        selectAudioLanguage(original: stream.originalAudioLanguage, on: avPlayer)
+        avPlayer.replaceCurrentItem(with: item)
         // Queued before the item is ready to play; AVPlayer applies it once it is, so the
         // transport bar comes up already parked where the user left off.
         if let resume = watchProgress.resumePosition(for: video.id) {
@@ -232,6 +236,48 @@ struct PlayerView: View {
         self.player = avPlayer
         avPlayer.play()
         return avPlayer
+    }
+
+    /// Asks for the viewer's languages in the order they ranked them, and the video's own language
+    /// after all of them.
+    ///
+    /// On a dubbed video AVFoundation gets no help from the playlist: every rendition is marked
+    /// `DEFAULT=NO`, so with nothing matching the viewer's languages it falls back to the first
+    /// autoselectable one. The renditions are ordered alphabetically by language code with the
+    /// original appended last, so that fallback is reliably a dub, and whichever dub sorts first:
+    /// German on a video dubbed into German and nothing earlier, Arabic the moment there is an
+    /// `ar` track. Only the fallback is wrong, and only the fallback is replaced here — a viewer
+    /// whose own language *is* among the dubs keeps getting it, as they did before.
+    ///
+    /// Settings › General › Apple TV Language is an ordered list, not a single choice, and
+    /// `preferredLanguages` takes languages "in order of desirability", so the ranking carries
+    /// across as it stands. `Locale.preferredLanguages` and not
+    /// `Bundle.main.preferredLocalizations`: the latter is filtered down to what the app itself
+    /// is localised for, which has nothing to do with what audio the viewer can follow.
+    ///
+    /// The video's own language comes from `StreamService`, which read it from the API — where the
+    /// fact survives — and it goes last, so it decides only when nothing the viewer asked for is
+    /// on offer.
+    ///
+    /// Criteria rather than `AVPlayerItem.select(_:in:)`, for the timing: criteria are applied
+    /// "when [the item] is made ready to play", so the choice is in place before the first sample
+    /// is rendered. Selecting explicitly would mean loading the media selection group first, which
+    /// cannot be awaited without either delaying playback — the one thing `playbackStartTimeout`
+    /// exists to bound — or racing it, and losing that race is an audible moment of the wrong
+    /// language. `appliesMediaSelectionCriteriaAutomatically` stays on, since it is what applies
+    /// these at all, and only the audible group is given criteria — subtitles keep following the
+    /// viewer's own settings.
+    ///
+    /// Best-effort: an undubbed video has one track and nothing to choose, and a language the
+    /// manifest doesn't carry leaves AVFoundation's own choice standing. Silence would be worse
+    /// than the wrong language.
+    private func selectAudioLanguage(original: String?, on player: AVPlayer) {
+        guard let original else { return }
+        player.setMediaSelectionCriteria(
+            AVPlayerMediaSelectionCriteria(
+                preferredLanguages: Locale.preferredLanguages + [original],
+                preferredMediaCharacteristics: nil),
+            forMediaCharacteristic: .audible)
     }
 
     /// Waits for a freshly started attempt to either play or prove that it won't.
