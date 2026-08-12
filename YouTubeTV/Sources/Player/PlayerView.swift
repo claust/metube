@@ -215,8 +215,8 @@ struct PlayerView: View {
                 AVURLAssetHTTPUserAgentKey: stream.userAgent
             ])
         let item = AVPlayerItem(asset: asset)
-        // Criteria before the item, so there is no window — however theoretical — in which the
-        // item could reach ready-to-play with no audio preference set.
+        // Criteria before attaching the item to the player, so there is no window — however
+        // theoretical — in which the item could reach ready-to-play with no audio preference set.
         let avPlayer = AVPlayer()
         selectAudioLanguage(original: stream.originalAudioLanguage, on: avPlayer)
         avPlayer.replaceCurrentItem(with: item)
