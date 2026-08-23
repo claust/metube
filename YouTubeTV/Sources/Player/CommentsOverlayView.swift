@@ -16,6 +16,23 @@ struct CommentsOverlayView: View {
     @State private var topLevel = CommentList()
     @State private var replies = CommentList()
 
+    /// The comment a replies list was opened from, while the top-level list is still to put
+    /// focus back on it. Cleared once it has, so scrolling afterwards isn't yanked back.
+    @State private var focusOnReturn: String?
+
+    /// The focused row, which is also the handle for restoring the viewer's place: focus is
+    /// what scrolls a tvOS list, so putting it back also puts the scroll position back.
+    @FocusState private var focusedRow: Row?
+
+    /// A row's identity for focus purposes. The pinned parent gets its own case rather than
+    /// sharing `.comment(id)` with the top-level row it was opened from — the two are never on
+    /// screen at once, but they would still be the same focus target.
+    private enum Row: Hashable {
+        case pinnedParent
+        case comment(String)
+        case loadMore
+    }
+
     private static let panelWidth: CGFloat = 640
 
     var body: some View {
@@ -31,8 +48,11 @@ struct CommentsOverlayView: View {
         }
         .ignoresSafeArea()
         .onExitCommand {
-            if parent != nil {
-                parent = nil
+            if let parent {
+                // Noted before the level changes, so the top-level list knows which row to
+                // take focus back to — see `restoreFocus(to:using:)`.
+                focusOnReturn = parent.id
+                self.parent = nil
                 // Cleared eagerly rather than left for `.task` to overwrite, so opening the
                 // next comment's replies can't briefly show this comment's list.
                 replies = CommentList()
@@ -91,33 +111,75 @@ struct CommentsOverlayView: View {
         } else if current.comments.isEmpty && current.loadFailed {
             failureNotice
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    if let parent {
-                        // The comment being replied to, pinned above its replies for context.
-                        CommentRow(comment: parent, showsReplyCount: false, action: nil)
-                        Divider().background(.white.opacity(0.3))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if let parent {
+                            // The comment being replied to, pinned above its replies for context.
+                            CommentRow(comment: parent, showsReplyCount: false, action: nil)
+                                .focused($focusedRow, equals: .pinnedParent)
+                            Divider().background(.white.opacity(0.3))
+                        }
+                        ForEach(current.comments) { comment in
+                            CommentRow(
+                                comment: comment,
+                                showsReplyCount: true,
+                                // Only a top-level comment with replies navigates; a reply row is
+                                // focusable (that's what scrolls the list) but Select does nothing.
+                                action: comment.hasReplies && parent == nil
+                                    ? { parent = comment } : nil
+                            )
+                            .focused($focusedRow, equals: .comment(comment.id))
+                        }
+                        if current.continuation != nil {
+                            LoadMoreRow(
+                                title: parent == nil ? "More comments" : "More replies",
+                                isLoading: current.isLoading,
+                                action: loadMore
+                            )
+                            .focused($focusedRow, equals: .loadMore)
+                        }
                     }
-                    ForEach(current.comments) { comment in
-                        CommentRow(
-                            comment: comment,
-                            showsReplyCount: true,
-                            // Only a top-level comment with replies navigates; a reply row is
-                            // focusable (that's what scrolls the list) but Select does nothing.
-                            action: comment.hasReplies && parent == nil
-                                ? { parent = comment } : nil)
-                    }
-                    if current.continuation != nil {
-                        LoadMoreRow(
-                            title: parent == nil ? "More comments" : "More replies",
-                            isLoading: current.isLoading,
-                            action: loadMore)
-                    }
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 60)
                 }
-                .padding(.horizontal, 40)
-                .padding(.bottom, 60)
+                // A task rather than `onChange`, so the handoff below is cancelled if the
+                // viewer moves on mid-flight, and so a list that was still loading when the
+                // replies were left picks the request up as soon as its first page lands.
+                .task(id: focusOnReturn) {
+                    if let focusOnReturn { await restoreFocus(to: focusOnReturn, using: proxy) }
+                }
             }
         }
+    }
+
+    /// Puts focus back on the comment a replies list was opened from, which is what returns the
+    /// top-level list to where the viewer left it — without this it comes back at the top,
+    /// however far down they had read.
+    ///
+    /// `scrollTo` first, because the row is typically well down a `LazyVStack` and so has not
+    /// been built yet — and then asked over and over rather than once, because a focus request
+    /// that arrives before the row exists is accepted and quietly dropped, leaving focus on
+    /// nothing at all. How long the stack takes to build the row is not knowable, so this
+    /// matches the handoff `HomeView` does after a refresh: keep asking until it takes.
+    @MainActor
+    private func restoreFocus(to id: String, using proxy: ScrollViewProxy) async {
+        proxy.scrollTo(id, anchor: .center)
+        // A second's worth of tries — long enough for a slow list, short enough that a row
+        // which never appears doesn't spin for the rest of the session.
+        var attempts = 0
+        while focusedRow != .comment(id), attempts < 10 {
+            // The viewer opened another thread while this was in flight. Focus belongs to that
+            // list now, and `focusOnReturn` is left standing for whenever they come back out.
+            guard parent == nil else { return }
+            focusedRow = .comment(id)
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+            attempts += 1
+        }
+        // Only once it has landed (or plainly won't), so an ordinary scroll afterwards isn't
+        // yanked back — and so a request still in mid-air isn't forgotten.
+        focusOnReturn = nil
     }
 
     private var failureNotice: some View {
