@@ -71,6 +71,10 @@ final class CommentsOverlayUITests: XCTestCase {
     /// only makes this skip on videos whose replies are all near the top.
     private static let minimumReplyDepth = 3
 
+    /// How many times to try bringing the panel up, each try covering one rung of the stream
+    /// ladder. Enough for every client `StreamService` falls back through.
+    private static let panelAttempts = 4
+
     /// How many rows to walk looking for one. Which comments have replies is up to YouTube, so
     /// this hunts rather than assuming a position.
     private static let replySearchDepth = 40
@@ -80,7 +84,8 @@ final class CommentsOverlayUITests: XCTestCase {
     ///
     /// A row's accessibility label is its author, text, likes and then its reply count, so a
     /// trailing "replies" is the reliable marker; `contains` would also match a comment that
-    /// merely talks about replies.
+    /// merely talks about replies. Case-insensitively, because a thread whose count YouTube
+    /// omitted is labelled "Replies" rather than "N replies".
     private func focusOnACommentWithReplies() throws -> String {
         var previous: String?
         for depth in 1...Self.replySearchDepth {
@@ -90,7 +95,7 @@ final class CommentsOverlayUITests: XCTestCase {
             // than spend the rest of the budget pressing into it.
             if label == previous { break }
             previous = label
-            if depth >= Self.minimumReplyDepth, let label, label.hasSuffix("replies") {
+            if depth >= Self.minimumReplyDepth, let label, label.lowercased().hasSuffix("replies") {
                 return label
             }
         }
@@ -109,17 +114,20 @@ final class CommentsOverlayUITests: XCTestCase {
     private func openComments() throws {
         try playFirstSearchResult()
 
-        // No queryable marker for "the stream is playing", and the transport bar can't be
-        // reached before there is one — so wait it out: PlayerView's ladder allows 15s per
-        // attempt.
-        Thread.sleep(forTimeInterval: 18)
-
-        // The transport bar first, then up onto its row of buttons, where "Comments" sits.
-        RemoteDriver.press(.down, settle: 1.0)
-        RemoteDriver.press(.up, settle: 1.0)
-        RemoteDriver.press(.select, settle: 1.5)
-
-        guard app.staticTexts["Comments"].waitForExistence(timeout: 20) else {
+        // There is no queryable marker for "the stream is playing", and the transport bar can't
+        // be reached before there is one. Retried rather than waited out once: PlayerView's
+        // ladder allows 15s per client and can work through several, so a single fixed wait
+        // would press into the loading overlay and give up on a video that was merely slow.
+        let panel = app.staticTexts["Comments"]
+        for _ in 0..<Self.panelAttempts where !panel.exists {
+            Thread.sleep(forTimeInterval: 10)
+            // The transport bar first, then up onto its row of buttons, where "Comments" sits.
+            RemoteDriver.press(.down, settle: 1.0)
+            RemoteDriver.press(.up, settle: 1.0)
+            RemoteDriver.press(.select, settle: 1.5)
+            _ = panel.waitForExistence(timeout: 8)
+        }
+        guard panel.exists else {
             throw XCTSkip("The comments panel did not come up — no stream, or no comments.")
         }
         // The first page has to be on screen before anything can be focused in it.

@@ -143,10 +143,11 @@ struct CommentsOverlayView: View {
                     .padding(.horizontal, 40)
                     .padding(.bottom, 60)
                 }
-                // `initial` covers the list that was still loading when the replies were left:
-                // the row to focus only exists once that first page lands.
-                .onChange(of: focusOnReturn, initial: true) { _, id in
-                    if let id { restoreFocus(to: id, using: proxy) }
+                // A task rather than `onChange`, so the handoff below is cancelled if the
+                // viewer moves on mid-flight, and so a list that was still loading when the
+                // replies were left picks the request up as soon as its first page lands.
+                .task(id: focusOnReturn) {
+                    if let focusOnReturn { await restoreFocus(to: focusOnReturn, using: proxy) }
                 }
             }
         }
@@ -156,15 +157,29 @@ struct CommentsOverlayView: View {
     /// top-level list to where the viewer left it — without this it comes back at the top,
     /// however far down they had read.
     ///
-    /// Scrolled to first: the row is typically well down a `LazyVStack` and so not built yet,
-    /// and focus can only go to a row that exists. Taking focus on the next turn of the run
-    /// loop gives the stack that pass to build it in.
-    private func restoreFocus(to id: String, using proxy: ScrollViewProxy) {
+    /// `scrollTo` first, because the row is typically well down a `LazyVStack` and so has not
+    /// been built yet — and then asked over and over rather than once, because a focus request
+    /// that arrives before the row exists is accepted and quietly dropped, leaving focus on
+    /// nothing at all. How long the stack takes to build the row is not knowable, so this
+    /// matches the handoff `HomeView` does after a refresh: keep asking until it takes.
+    @MainActor
+    private func restoreFocus(to id: String, using proxy: ScrollViewProxy) async {
         proxy.scrollTo(id, anchor: .center)
-        Task { @MainActor in
+        // A second's worth of tries — long enough for a slow list, short enough that a row
+        // which never appears doesn't spin for the rest of the session.
+        var attempts = 0
+        while focusedRow != .comment(id), attempts < 10 {
+            // The viewer opened another thread while this was in flight. Focus belongs to that
+            // list now, and `focusOnReturn` is left standing for whenever they come back out.
+            guard parent == nil else { return }
             focusedRow = .comment(id)
-            focusOnReturn = nil
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+            attempts += 1
         }
+        // Only once it has landed (or plainly won't), so an ordinary scroll afterwards isn't
+        // yanked back — and so a request still in mid-air isn't forgotten.
+        focusOnReturn = nil
     }
 
     private var failureNotice: some View {
