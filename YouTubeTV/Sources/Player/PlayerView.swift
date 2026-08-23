@@ -14,6 +14,8 @@ struct PlayerView: View {
 
     @State private var player: AVPlayer?
     @StateObject private var skipper = SponsorBlockSkipper()
+    /// Whether the comments panel is up. Shared with `PlayerContainer`, which presents it.
+    @StateObject private var comments = CommentsPresentation()
     @State private var loadError: Error?
     @State private var isLoading = true
     @State private var didPlayToEndObserver: NSObjectProtocol?
@@ -29,7 +31,7 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
 
             if let player {
-                PlayerContainer(player: player, video: video)
+                PlayerContainer(player: player, video: video, comments: comments)
                     .ignoresSafeArea()
             }
 
@@ -359,7 +361,11 @@ struct PlayerView: View {
         }
     }
 
-    /// Returns to the home screen automatically once the video finishes playing.
+    /// Returns to the home screen automatically once the video finishes playing — unless the
+    /// comments panel is up, in which case the player just stops on its last frame.
+    ///
+    /// Someone reading the comments isn't done with the screen because the video is: the video
+    /// running out mid-thread would otherwise pull the panel away and lose their place.
     @MainActor
     private func observePlaybackEnd(of item: AVPlayerItem) {
         if let didPlayToEndObserver {
@@ -370,6 +376,7 @@ struct PlayerView: View {
         let onClose = onClose
         let videoId = video.id
         let watchProgress = watchProgress
+        let comments = comments
         let fallbackDuration = video.durationSeconds ?? 0
         didPlayToEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -383,8 +390,11 @@ struct PlayerView: View {
                 watchProgress.markFinished(
                     videoId: videoId,
                     duration: duration.isFinite ? duration : fallbackDuration)
+                // Only the automatic exit is suppressed, never a deliberate one: Menu still
+                // leaves, from the panel and then from the stopped player, as it always did.
+                guard !comments.isPresented else { return }
+                onClose()
             }
-            onClose()
         }
     }
 
@@ -491,6 +501,8 @@ struct PlayerView: View {
 private struct PlayerContainer: UIViewControllerRepresentable {
     let player: AVPlayer
     let video: VideoItem
+    /// Written here, read by the player: whether the comments panel is currently over the video.
+    let comments: CommentsPresentation
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -514,6 +526,7 @@ private struct PlayerContainer: UIViewControllerRepresentable {
     /// then returns it to the player by plain dismissal.
     private func commentsButton(for controller: AVPlayerViewController) -> UIMenuElement {
         let videoId = video.id
+        let comments = self.comments
         return UIAction(
             title: "Comments",
             image: UIImage(systemName: "text.bubble")
@@ -522,12 +535,49 @@ private struct PlayerContainer: UIViewControllerRepresentable {
             let overlay = CommentsOverlayView(videoId: videoId) { [weak controller] in
                 controller?.dismiss(animated: true)
             }
-            let host = UIHostingController(rootView: overlay)
+            let host = CommentsHostingController(rootView: overlay, presentation: comments)
             // Over the video, not instead of it: playback continues, visible to the left of
             // the panel and dimly through it.
             host.modalPresentationStyle = .overFullScreen
             host.view.backgroundColor = .clear
+            // Eagerly, rather than waiting for the presentation animation: a video that ends
+            // during it must already count as "something is over the player".
+            comments.isPresented = true
             controller.present(host, animated: true)
         }
+    }
+}
+
+/// Whether the comments panel is over the video right now.
+///
+/// The panel is presented by `PlayerContainer` but matters to `PlayerView`, which must not walk
+/// out from under it when the video ends. Deliberately not `@Published`: nothing draws from it,
+/// so republishing would invalidate the player view for no reason.
+@MainActor
+private final class CommentsPresentation: ObservableObject {
+    var isPresented = false
+}
+
+/// Hosts the comments panel and reports when it has gone.
+///
+/// `viewDidDisappear` rather than the dismissal's completion handler, so the flag clears
+/// however the panel goes away — the overlay's own Menu press, its "Close" button, or the
+/// player being torn down underneath it.
+private final class CommentsHostingController: UIHostingController<CommentsOverlayView> {
+    private let presentation: CommentsPresentation
+
+    init(rootView: CommentsOverlayView, presentation: CommentsPresentation) {
+        self.presentation = presentation
+        super.init(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        presentation.isPresented = false
     }
 }

@@ -16,6 +16,23 @@ struct CommentsOverlayView: View {
     @State private var topLevel = CommentList()
     @State private var replies = CommentList()
 
+    /// The comment a replies list was opened from, while the top-level list is still to put
+    /// focus back on it. Cleared once it has, so scrolling afterwards isn't yanked back.
+    @State private var focusOnReturn: String?
+
+    /// The focused row, which is also the handle for restoring the viewer's place: focus is
+    /// what scrolls a tvOS list, so putting it back also puts the scroll position back.
+    @FocusState private var focusedRow: Row?
+
+    /// A row's identity for focus purposes. The pinned parent gets its own case rather than
+    /// sharing `.comment(id)` with the top-level row it was opened from — the two are never on
+    /// screen at once, but they would still be the same focus target.
+    private enum Row: Hashable {
+        case pinnedParent
+        case comment(String)
+        case loadMore
+    }
+
     private static let panelWidth: CGFloat = 640
 
     var body: some View {
@@ -31,8 +48,11 @@ struct CommentsOverlayView: View {
         }
         .ignoresSafeArea()
         .onExitCommand {
-            if parent != nil {
-                parent = nil
+            if let parent {
+                // Noted before the level changes, so the top-level list knows which row to
+                // take focus back to — see `restoreFocus(to:using:)`.
+                focusOnReturn = parent.id
+                self.parent = nil
                 // Cleared eagerly rather than left for `.task` to overwrite, so opening the
                 // next comment's replies can't briefly show this comment's list.
                 replies = CommentList()
@@ -91,32 +111,59 @@ struct CommentsOverlayView: View {
         } else if current.comments.isEmpty && current.loadFailed {
             failureNotice
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    if let parent {
-                        // The comment being replied to, pinned above its replies for context.
-                        CommentRow(comment: parent, showsReplyCount: false, action: nil)
-                        Divider().background(.white.opacity(0.3))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if let parent {
+                            // The comment being replied to, pinned above its replies for context.
+                            CommentRow(comment: parent, showsReplyCount: false, action: nil)
+                                .focused($focusedRow, equals: .pinnedParent)
+                            Divider().background(.white.opacity(0.3))
+                        }
+                        ForEach(current.comments) { comment in
+                            CommentRow(
+                                comment: comment,
+                                showsReplyCount: true,
+                                // Only a top-level comment with replies navigates; a reply row is
+                                // focusable (that's what scrolls the list) but Select does nothing.
+                                action: comment.hasReplies && parent == nil
+                                    ? { parent = comment } : nil
+                            )
+                            .focused($focusedRow, equals: .comment(comment.id))
+                        }
+                        if current.continuation != nil {
+                            LoadMoreRow(
+                                title: parent == nil ? "More comments" : "More replies",
+                                isLoading: current.isLoading,
+                                action: loadMore
+                            )
+                            .focused($focusedRow, equals: .loadMore)
+                        }
                     }
-                    ForEach(current.comments) { comment in
-                        CommentRow(
-                            comment: comment,
-                            showsReplyCount: true,
-                            // Only a top-level comment with replies navigates; a reply row is
-                            // focusable (that's what scrolls the list) but Select does nothing.
-                            action: comment.hasReplies && parent == nil
-                                ? { parent = comment } : nil)
-                    }
-                    if current.continuation != nil {
-                        LoadMoreRow(
-                            title: parent == nil ? "More comments" : "More replies",
-                            isLoading: current.isLoading,
-                            action: loadMore)
-                    }
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 60)
                 }
-                .padding(.horizontal, 40)
-                .padding(.bottom, 60)
+                // `initial` covers the list that was still loading when the replies were left:
+                // the row to focus only exists once that first page lands.
+                .onChange(of: focusOnReturn, initial: true) { _, id in
+                    if let id { restoreFocus(to: id, using: proxy) }
+                }
             }
+        }
+    }
+
+    /// Puts focus back on the comment a replies list was opened from, which is what returns the
+    /// top-level list to where the viewer left it — without this it comes back at the top,
+    /// however far down they had read.
+    ///
+    /// Scrolled to first: the row is typically well down a `LazyVStack` and so not built yet,
+    /// and focus can only go to a row that exists. Taking focus on the next turn of the run
+    /// loop gives the stack that pass to build it in.
+    private func restoreFocus(to id: String, using proxy: ScrollViewProxy) {
+        proxy.scrollTo(id, anchor: .center)
+        Task { @MainActor in
+            focusedRow = .comment(id)
+            focusOnReturn = nil
         }
     }
 
