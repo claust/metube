@@ -67,8 +67,15 @@ extension VideoItem {
     /// both reading "3 days ago" come out microseconds apart — in parse order, and the *later*
     /// one looks newer. Sorting on the raw dates would therefore reverse same-age videos rather
     /// than leave them be. Rounding folds that skew away without touching ages that genuinely
-    /// differ: the shortest unit InnerTube's text ever carries is a second, and two uploads less
-    /// than a minute apart are simultaneous as far as a row of cards is concerned.
+    /// differ: the shortest unit InnerTube's text ever carries is a second, and two uploads that
+    /// land in one bucket are as good as simultaneous on a row of cards.
+    ///
+    /// A bucket rather than a tolerance, and deliberately so. "Within a minute of each other"
+    /// isn't transitive — a is close to b, b to c, a not to c — so it isn't an ordering, and
+    /// `sorted(by:)` requires one. The price of a bucket is a boundary: two timestamps under a
+    /// minute apart do occasionally fall either side of it. That is true of any bucketing,
+    /// whichever way it rounds, and the skew this exists to absorb is microseconds wide, so it
+    /// takes a near-exact hit on the boundary to happen at all.
     var publishedMinute: TimeInterval? {
         publishedAt.map { ($0.timeIntervalSince1970 / 60).rounded() }
     }
