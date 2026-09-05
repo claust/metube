@@ -707,7 +707,7 @@ struct HomeView: View {
         if update(&sections) { return true }
         for feed in Self.supplementaryFeeds {
             guard var rows = feedSections[feed] else { continue }
-            guard update(&rows, newestFirst: feed.isChronological) else { continue }
+            guard update(&rows, newestFirst: feed.sortsNewestFirst) else { continue }
             feedSections[feed] = rows
             return true
         }

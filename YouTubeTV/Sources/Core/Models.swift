@@ -182,12 +182,15 @@ enum Feed: CaseIterable {
 
     /// Whether this feed reads better newest-first than in the order YouTube sent it.
     ///
+    /// Named for the direction rather than for "chronological", which points the other way as
+    /// often as not, and reads as oldest-first to most people.
+    ///
     /// Subscriptions is the one feed that is simply a list of what your channels have put up,
     /// and the question it answers is "what's new" — but the response opens on a relevance-ranked
     /// shelf (`Most relevant`), so the newest upload can sit anywhere in it. Home is
     /// recommendations, where the order *is* the recommendation, and History is the order things
     /// were watched in; reordering either would throw away the only thing their order says.
-    var isChronological: Bool { self == .subscriptions }
+    var sortsNewestFirst: Bool { self == .subscriptions }
 }
 
 /// A channel's browse page: who it is, and its shelves in the same shape as any feed's.

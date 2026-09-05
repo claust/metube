@@ -31,10 +31,12 @@ struct FeedService {
         var sections = collapsingUntitledRows(in: result.sections)
 
         // Subscriptions is drawn newest-first rather than in the order it arrived — see
-        // `Feed.isChronological`. After the fold above, so the grid is ordered as the one list it
-        // is rather than chunk by chunk, and never over a Shorts row: its cells carry no age, so
-        // sorting one would only shuffle the row's nil dates about.
-        if feed.isChronological {
+        // `Feed.sortsNewestFirst`. After the fold above, so the grid is ordered as the one list
+        // it is rather than chunk by chunk. A Shorts row is passed over: not one of its cells
+        // carries an age, so there is nothing to order it by — `newestFirst()` would hand the
+        // row straight back — and skipping it says so, rather than leaving a reader to work out
+        // that the call was a no-op.
+        if feed.sortsNewestFirst {
             sections = sections.map { section in
                 guard !section.isShorts else { return section }
                 return FeedSection(
