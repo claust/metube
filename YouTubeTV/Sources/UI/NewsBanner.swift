@@ -228,11 +228,17 @@ struct NewsBanner: View {
                 runStart = Date()
             }
         }
-        // A refreshed feed is a different set of cells. Without clearing the old measurements
-        // `cellWidths` keeps ids that are no longer in `items`, so its count never matches again
-        // and `laneWidth` stays nil for good — which stops the marquee and disables stepping.
-        .onChange(of: items.map(\.id)) { _, _ in
-            cellWidths = [:]
+        // A refreshed feed is a different set of cells, and `laneWidth` needs exactly one
+        // measurement per cell. Ids that have left `items` must be dropped, or the count never
+        // matches again. Ids that survived must be *kept*: `onGeometryChange` reports a width
+        // when its cell appears or changes size, and a cell that stayed on screen at the same
+        // width does neither — so a measurement thrown away here is never handed back. Either
+        // mistake leaves `laneWidth` nil for good, which stops the marquee and disables stepping.
+        // Clearing the lot was what did it on every refresh where most headlines carried over,
+        // which after a long video is most of them.
+        .onChange(of: items.map(\.id)) { _, ids in
+            let current = Set(ids)
+            cellWidths = cellWidths.filter { current.contains($0.key) }
             base = 0
             runStart = isActive ? nil : Date()
         }
