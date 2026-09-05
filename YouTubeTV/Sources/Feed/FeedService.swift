@@ -41,7 +41,7 @@ struct FeedService {
                 guard !section.isShorts else { return section }
                 return FeedSection(
                     id: section.id, title: section.title, items: section.items.newestFirst(),
-                    continuation: section.continuation)
+                    continuation: section.continuation, isShorts: section.isShorts)
             }
         }
 
