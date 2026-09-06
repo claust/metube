@@ -59,6 +59,58 @@ struct VideoItem: Identifiable, Hashable {
     }
 }
 
+extension VideoItem {
+    /// `publishedAt` rounded to the minute, which is the finest a feed's ages can honestly be
+    /// compared at.
+    ///
+    /// Each cell's age is parsed against its own `Date()` (see `VideoItemParser`), so two cards
+    /// both reading "3 days ago" come out microseconds apart — in parse order, and the *later*
+    /// one looks newer. Sorting on the raw dates would therefore reverse same-age videos rather
+    /// than leave them be. Rounding folds that skew away without touching ages that genuinely
+    /// differ: the shortest unit InnerTube's text ever carries is a second, and two uploads that
+    /// land in one bucket are as good as simultaneous on a row of cards.
+    ///
+    /// A bucket rather than a tolerance, and deliberately so. "Within a minute of each other"
+    /// isn't transitive — a is close to b, b to c, a not to c — so it isn't an ordering, and
+    /// `sorted(by:)` requires one. The price of a bucket is a boundary: two timestamps under a
+    /// minute apart do occasionally fall either side of it. That is true of any bucketing,
+    /// whichever way it rounds, and the skew this exists to absorb is microseconds wide, so it
+    /// takes a near-exact hit on the boundary to happen at all.
+    var publishedMinute: TimeInterval? {
+        publishedAt.map { ($0.timeIntervalSince1970 / 60).rounded() }
+    }
+}
+
+extension Array where Element == VideoItem {
+    /// This list newest first, as far as InnerTube's age text allows.
+    ///
+    /// Best effort by nature: the dates behind it are approximated from "3 days ago" strings, so
+    /// everything published on the same day carries the same age and cannot be told apart. Those
+    /// ties keep the order YouTube sent them in — the only further signal there is — which is why
+    /// this sorts on the original index as a tiebreak rather than calling `sorted(by:)`, whose
+    /// stability Swift promises nothing about.
+    ///
+    /// Items whose cell carried no age at all (Shorts, some History rows) sink to the end: there
+    /// is nothing to place them by, and a guess would push dated videos out of order.
+    func newestFirst() -> [VideoItem] {
+        enumerated()
+            .sorted { lhs, rhs in
+                switch (lhs.element.publishedMinute, rhs.element.publishedMinute) {
+                case let (left?, right?):
+                    if left != right { return left > right }
+                case (nil, .some):
+                    return false
+                case (.some, nil):
+                    return true
+                case (nil, nil):
+                    break
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+}
+
 /// One horizontal row of the feed — a YouTube "shelf" such as Recommended or Watch it again.
 struct FeedSection: Identifiable, Hashable {
     /// Assigned at parse time. Pages are only ever appended, so this stays stable for the
@@ -127,6 +179,18 @@ enum Feed: CaseIterable {
         case .history: return "Continue watching"
         }
     }
+
+    /// Whether this feed reads better newest-first than in the order YouTube sent it.
+    ///
+    /// Named for the direction rather than for "chronological", which points the other way as
+    /// often as not, and reads as oldest-first to most people.
+    ///
+    /// Subscriptions is the one feed that is simply a list of what your channels have put up,
+    /// and the question it answers is "what's new" — but the response opens on a relevance-ranked
+    /// shelf (`Most relevant`), so the newest upload can sit anywhere in it. Home is
+    /// recommendations, where the order *is* the recommendation, and History is the order things
+    /// were watched in; reordering either would throw away the only thing their order says.
+    var sortsNewestFirst: Bool { self == .subscriptions }
 }
 
 /// A channel's browse page: who it is, and its shelves in the same shape as any feed's.

@@ -12,8 +12,9 @@ struct FeedService {
 
     /// Loads the first page of any browsable feed on the TVHTML5 client.
     ///
-    /// Supplementary feeds get their untitled rows folded into the titled one above them, and
-    /// that row retitled to name the feed. Subscriptions opens with a "Most relevant" shelf and
+    /// Supplementary feeds get their untitled rows folded into the titled one above them, that
+    /// row retitled to name the feed, and — where the feed reads best that way — its videos put
+    /// in newest-first order. Subscriptions opens with a "Most relevant" shelf and
     /// History with an untitled one — neither says which feed it came from, which matters once
     /// the rows sit beside Home's.
     func loadFeed(_ feed: Feed, accessToken: String) async throws -> FeedPage {
@@ -28,6 +29,21 @@ struct FeedService {
         guard feed != .home else { return result }
 
         var sections = collapsingUntitledRows(in: result.sections)
+
+        // Subscriptions is drawn newest-first rather than in the order it arrived — see
+        // `Feed.sortsNewestFirst`. After the fold above, so the grid is ordered as the one list
+        // it is rather than chunk by chunk. A Shorts row is passed over: not one of its cells
+        // carries an age, so there is nothing to order it by — `newestFirst()` would hand the
+        // row straight back — and skipping it says so, rather than leaving a reader to work out
+        // that the call was a no-op.
+        if feed.sortsNewestFirst {
+            sections = sections.map { section in
+                guard !section.isShorts else { return section }
+                return FeedSection(
+                    id: section.id, title: section.title, items: section.items.newestFirst(),
+                    continuation: section.continuation, isShorts: section.isShorts)
+            }
+        }
 
         // Skips a leading Shorts row: it says what it holds, and naming it after the feed would
         // both lose that and leave the feed's own heading on the wrong row.

@@ -679,13 +679,20 @@ struct HomeView: View {
     @MainActor
     @discardableResult
     private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
-        func update(_ list: inout [FeedSection]) -> Bool {
+        func update(_ list: inout [FeedSection], newestFirst: Bool = false) -> Bool {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
             let section = list[index]
             let existing = Set(section.items.map(\.id))
             // Shorts belong only in a Shorts row, on a page as much as on the first load — see
             // `FeedSection.admitting`.
-            let fresh = section.admitting(items).filter { !existing.contains($0.id) }
+            var fresh = section.admitting(items).filter { !existing.contains($0.id) }
+            // A chronological row's next page arrives in the order YouTube sent it, so it is put
+            // in date order too — but only within itself, and it still lands at the end. Sorting
+            // the row as a whole would move cards the user has already scrolled past, and take
+            // the one they are focused on with them, which is the row jumping sideways under
+            // them mid-read. The page boundary is the price: dates step back up at it rather
+            // than running down the whole row.
+            if newestFirst, !section.isShorts { fresh = fresh.newestFirst() }
             list[index] = FeedSection(
                 id: id,
                 title: section.title,
@@ -700,7 +707,7 @@ struct HomeView: View {
         if update(&sections) { return true }
         for feed in Self.supplementaryFeeds {
             guard var rows = feedSections[feed] else { continue }
-            guard update(&rows) else { continue }
+            guard update(&rows, newestFirst: feed.sortsNewestFirst) else { continue }
             feedSections[feed] = rows
             return true
         }
