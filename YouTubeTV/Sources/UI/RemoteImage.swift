@@ -42,7 +42,12 @@ struct RemoteImage<Content: View>: View {
     }
 
     var body: some View {
-        content(phase)
+        // In a stack rather than bare, so the load below has a view to hang on whatever the
+        // caller draws. A caller showing nothing until the image arrives — the cards' avatars,
+        // a channel's banner — hands back empty content while loading, and a `.task` on empty
+        // content never starts: the load never ran, and those images sat on `.loading` for good.
+        // A single child in a `ZStack` lays out exactly as it would on its own.
+        ZStack { content(phase) }
             // Cancelled when the view goes away, which leaves `phase` on `.loading` rather than
             // on a failure: coming back runs this again and asks for the image afresh.
             //

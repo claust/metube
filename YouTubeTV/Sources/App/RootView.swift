@@ -255,8 +255,9 @@ struct RootView: View {
         )
     }
 
-    /// Pushes the channel a card came from. A card whose cell never linked one can't get here —
-    /// the menu doesn't offer the option — so this quietly does nothing in that case.
+    /// Pushes the channel a card came from. The menu hands over the card with its channel filled
+    /// in (see `VideoChannelStore`) and only offers this once there is one, so the guard is a
+    /// formality.
     private func openChannel(_ video: VideoItem) {
         guard let channelID = video.channelID else { return }
         path.append(.channel(id: channelID, title: video.author))

@@ -351,6 +351,9 @@ private func durationOverlay(in json: [String: Any]) -> String {
 /// the TV tiles — so this searches the cell for browse endpoints rather than naming a path. A
 /// channel id is the only `browseId` in a video cell that starts with `UC`; feed ids (`FEhistory`)
 /// and playlist ids don't, so the prefix is what separates them.
+///
+/// Home's video tiles no longer carry that menu (it is fetched when Select is held), so for them
+/// this finds nothing and `VideoChannelStore` looks the channel up by video id instead.
 private func channelID(in cell: [String: Any]) -> String? {
     var found: String?
     func walk(_ obj: Any) {

@@ -42,6 +42,7 @@ struct VideoCard: View {
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
+    @EnvironmentObject private var videoChannels: VideoChannelStore
     @FocusState private var isFocused: Bool
 
     /// Counts out the hold while Select is down, and is cancelled by the release.
@@ -55,6 +56,11 @@ struct VideoCard: View {
 
     /// How long Select has to be held for the menu rather than the video.
     private static let longPressDuration = Duration.milliseconds(500)
+
+    /// How long focus has to rest on a card before its channel is looked up. Holding a direction
+    /// sweeps focus across a whole row, and a card passed over on the way isn't worth a request;
+    /// well under `longPressDuration`, so a card held for its menu has asked by the time it opens.
+    private static let channelLookupDelay = Duration.milliseconds(250)
 
     /// Shared by the focus panel and the thumbnail's top corners.
     private static let cornerRadius: CGFloat = 16
@@ -119,8 +125,16 @@ struct VideoCard: View {
         .buttonStyle(BareButtonStyle(onPressingChanged: pressingChanged))
         // Looks the channel's picture up the first time this card is drawn, if nothing already
         // knows it. The store dedupes by channel and remembers the answer across launches, so a
-        // row of cards from one channel costs one request, once.
-        .task(id: item.id) { await channelAvatars.resolve(item) }
+        // row of cards from one channel costs one request, once. Keyed on the channel as well, so
+        // a card whose channel only arrives on focus (see below) gets its picture then.
+        .task(id: [item.id, resolvedItem.channelID]) { await channelAvatars.resolve(resolvedItem) }
+        // A Home tile doesn't say which channel it's from, so the card finds out once focus
+        // settles on it — ahead of the long press that needs it for the menu, and in time to
+        // draw the avatar while the card is still being looked at. Free when the cell said.
+        .task(id: isFocused) {
+            guard isFocused, (try? await Task.sleep(for: Self.channelLookupDelay)) != nil else { return }
+            videoChannels.prefetch(item)
+        }
         // Stated rather than left to SwiftUI to derive from the caption: a Short's tile has no
         // caption, so without this it would be an unlabelled button to VoiceOver and to the UI
         // tests, which identify a card by its label.
@@ -154,6 +168,10 @@ struct VideoCard: View {
             onLongPress?()
         }
     }
+
+    /// The card's video with its channel filled in once `VideoChannelStore` has found it. What
+    /// the avatar is looked up and drawn by, since a Home tile doesn't say whose it is.
+    private var resolvedItem: VideoItem { videoChannels.resolved(item) }
 
     /// Opens the video, unless this press already opened the card's menu.
     private func play() {
@@ -231,7 +249,7 @@ struct VideoCard: View {
     /// two clipped caps come to about a quarter of its area.
     @ViewBuilder
     private var channelAvatar: some View {
-        if let url = channelAvatars.url(for: item) {
+        if let url = channelAvatars.url(for: resolvedItem) {
             // Scaled to the tile on a Short, which is a little over half a video card's width —
             // an 88pt disc there would read as the tile's subject rather than as a hint.
             let diameter: CGFloat = item.isShort ? 64 : 88

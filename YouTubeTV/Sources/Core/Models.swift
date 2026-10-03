@@ -6,9 +6,10 @@ struct VideoItem: Identifiable, Hashable {
     let title: String
     let author: String
     /// The channel's `UC…` id, when the cell carried one. What `ChannelAvatarStore` looks the
-    /// channel's picture up by, and what the card's menu needs for both of its actions — a cell
-    /// without one offers neither "Go to channel" nor the subscribe toggle.
-    let channelID: String?
+    /// channel's picture up by, and what the card's menu needs for both of its actions.
+    /// `var` because Home's tiles no longer carry it: `VideoChannelStore` looks it up by video id
+    /// and fills it in (see `VideoChannelStore.resolved(_:)`).
+    var channelID: String?
     let thumbnailURL: URL?
     /// The channel's round profile picture, when the cell carried one. Not every shelf sends it
     /// — the TV feed's tiles often don't — so anything drawing it must cope with `nil`.
