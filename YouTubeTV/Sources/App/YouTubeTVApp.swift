@@ -6,6 +6,7 @@ struct YouTubeTVApp: App {
     @StateObject private var watchProgress: WatchProgressStore
     @StateObject private var watchProgressSync: WatchProgressSync
     @StateObject private var channelAvatars = ChannelAvatarStore()
+    @StateObject private var videoChannels = VideoChannelStore()
     @StateObject private var subscriptions = SubscriptionStore()
     @StateObject private var watchHistory: WatchHistoryStore
 
@@ -39,6 +40,7 @@ struct YouTubeTVApp: App {
                 .environmentObject(watchProgress)
                 .environmentObject(watchProgressSync)
                 .environmentObject(channelAvatars)
+                .environmentObject(videoChannels)
                 .environmentObject(subscriptions)
                 .environmentObject(watchHistory)
         }
