@@ -61,6 +61,32 @@ final class SearchUITests: XCTestCase {
         add(shot)
     }
 
+    /// An artist's name has to bring up their music videos, not just videos about them.
+    ///
+    /// Search tags music videos `LOCKUP_CONTENT_TYPE_MUSIC` rather than `_VIDEO`, so a parser
+    /// that only knows `_VIDEO` still fills the grid — with reaction videos, interviews and,
+    /// signed in, whatever else the account watches — while every music video is missing.
+    /// Counting cards can't tell those apart, so this looks for the artist's own uploads,
+    /// which are titled "Taylor Swift - <song>". On 2026-10-04 the signed-in response held 27
+    /// music videos, most titled that way, and 9 ordinary videos, none of them.
+    func testSearchingForAnArtistShowsTheirMusicVideos() throws {
+        try openSearch()
+        app.typeText("taylor swift")
+
+        let cards = app.buttons.matching(identifier: "SearchResult")
+        XCTAssertTrue(
+            cards.element(boundBy: 0).waitForExistence(timeout: 30),
+            "No results for an artist's name."
+        )
+
+        // The card's label leads with its title (see `VideoCard.accessibilityText`).
+        let musicVideos = cards.matching(NSPredicate(format: "label BEGINSWITH[c] %@", "Taylor Swift - "))
+        XCTAssertGreaterThan(
+            musicVideos.count, 0,
+            "\(cards.count) result(s), but none of the artist's music videos — they are being dropped."
+        )
+    }
+
     /// A result must reach the player, which is the wiring most likely to be wrong:
     /// the player is presented over the navigation stack Search was pushed onto.
     func testSelectingAResultOpensThePlayer() throws {

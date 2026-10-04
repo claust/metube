@@ -22,6 +22,11 @@ enum VideoItemParser {
     /// result order and which duplicate `dedupe` keeps from shifting between identical
     /// responses. Cell keys are probed ahead of the recursion, so a dictionary that is
     /// itself a cell is emitted before anything nested inside it.
+    ///
+    /// Ads are left out by the container they arrive in. An in-feed ad is an ordinary
+    /// `tileRenderer` inside an `adSlotRenderer`, and its select command opens the watch page
+    /// just as a station's in the "Watch together" row does (see `watchVideoId`), so nothing in
+    /// the cell itself reliably gives it away.
     static func items(in json: [String: Any]) -> [VideoItem] {
         var results: [VideoItem] = []
 
@@ -32,7 +37,7 @@ enum VideoItemParser {
                         results.append(item)
                     }
                 }
-                for key in dict.keys.sorted() { walk(dict[key] as Any) }
+                for key in dict.keys.sorted() where key != adSlotKey { walk(dict[key] as Any) }
             } else if let array = obj as? [Any] {
                 for value in array { walk(value) }
             }
@@ -41,6 +46,9 @@ enum VideoItemParser {
 
         return dedupe(results)
     }
+
+    /// The wrapper YouTube serves an in-feed ad in. See `items(in:)`.
+    private static let adSlotKey = "adSlotRenderer"
 
     /// The cell renderers this app knows how to turn into a `VideoItem`.
     private enum Shape: CaseIterable {
@@ -125,8 +133,25 @@ private func parseTile(_ tile: [String: Any]) -> VideoItem? {
 }
 
 private func tileVideoId(_ tile: [String: Any]) -> String? {
-    for path in ["onSelectCommand/watchEndpoint/videoId", "onSelectCommand/reelWatchEndpoint/videoId"] {
-        if let id = tile.string(at: path), !id.isEmpty { return id }
+    guard let command = tile["onSelectCommand"] as? [String: Any] else { return nil }
+    if let id = watchVideoId(in: command) { return id }
+    if let id = command.string(at: "reelWatchEndpoint/videoId"), !id.isEmpty { return id }
+    return nil
+}
+
+/// The video a select or tap command opens the watch page on, or `nil` when it opens something
+/// else.
+///
+/// Usually the command is the `watchEndpoint` itself. Some cells wrap it in a
+/// `commandExecutorCommand` together with other commands to run on the same press: every tile
+/// in Home's "Watch together" row of live music stations does, pairing it with a
+/// `feedbackEndpoint` (verified 2026-10-04). Reading only the bare endpoint dropped that whole
+/// row. Only the wrapped list is looked through, not the whole subtree, where a `watchEndpoint`
+/// could belong to some other action.
+private func watchVideoId(in command: [String: Any]) -> String? {
+    let commands = [command] + (command.value(at: "commandExecutorCommand/commands") as? [[String: Any]] ?? [])
+    for candidate in commands {
+        if let id = candidate.string(at: "watchEndpoint/videoId"), !id.isEmpty { return id }
     }
     return nil
 }
@@ -142,9 +167,6 @@ private func tileThumbnails(_ tile: [String: Any]) -> [[String: Any]]? {
 /// renderer shapes above — flat `content*` fields and `{"content": "…"}` strings instead of
 /// nested renderers and `runs`/`simpleText` — so it needs its own reader throughout.
 private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
-    // Playlists and channels use the same cell with a non-video contentType, and their
-    // `contentId` is a playlist/channel id — handing one to the player would 404.
-    guard (lockup["contentType"] as? String) == "LOCKUP_CONTENT_TYPE_VIDEO" else { return nil }
     guard let videoId = lockupVideoId(lockup) else { return nil }
 
     let thumbnails = lockupThumbnails(lockup)
@@ -170,13 +192,24 @@ private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
     )
 }
 
-/// `contentId` is the videoId for a video lockup; the tap command carries it too, and is the
-/// fallback for a cell that ever omits the flat field.
+/// The video a lockup plays, or `nil` for a lockup that opens something else.
+///
+/// `contentType` can't decide this. Music videos arrive as `LOCKUP_CONTENT_TYPE_MUSIC`, not
+/// `_VIDEO` (verified 2026-10-04: across a dozen searches they were half of the playable hits,
+/// and nearly all of them for an artist's name), and a list of types to let through drops
+/// whatever YouTube labels next. What every playable lockup shares is its tap command: a
+/// `watchEndpoint` for the cell's own `contentId`. Nothing else passes. Channels, albums, shows
+/// and podcasts tap through to a `browseEndpoint`, and Shorts to a `reelWatchEndpoint`, which
+/// keeps them out as before. A playlist does open the watch page, but on its first video, so the
+/// two ids differ: its `contentId` is the playlist's, and a card for it would carry the
+/// playlist's title while playing one video out of it.
 private func lockupVideoId(_ lockup: [String: Any]) -> String? {
-    if let id = lockup["contentId"] as? String, !id.isEmpty { return id }
-    let path = "rendererContext/commandContext/onTap/innertubeCommand/watchEndpoint/videoId"
-    if let id = lockup.string(at: path), !id.isEmpty { return id }
-    return nil
+    let path = "rendererContext/commandContext/onTap/innertubeCommand"
+    guard let command = lockup.value(at: path) as? [String: Any], let id = watchVideoId(in: command) else {
+        return nil
+    }
+    if let contentId = lockup["contentId"] as? String, contentId != id { return nil }
+    return id
 }
 
 /// The running time, stamped on the thumbnail as a badge rather than the renderers'
