@@ -211,9 +211,22 @@ collections). No paging is implemented — the first response already carries ~3
 ~43 `lockupViewModel`s, which is where every actual video lives. This is the newer view-model
 shape and shares no field paths with the renderers:
 
-- videoId: `contentId` (fallback `rendererContext.commandContext.onTap.innertubeCommand.watchEndpoint.videoId`)
-- type filter: `contentType == "LOCKUP_CONTENT_TYPE_VIDEO"` (playlists/channels use the same
-  cell, and their `contentId` is a playlist/channel id — handing one to `/player` 404s)
+- videoId: `rendererContext.commandContext.onTap.innertubeCommand.watchEndpoint.videoId`, kept
+  only when it equals `contentId`
+- which lockups are videos: **not** `contentType`. Verified 2026-10-04 across 13 searches,
+  tallying each lockup's type against its tap command:
+
+  | contentType | onTap command | count |
+  |---|---|---|
+  | `LOCKUP_CONTENT_TYPE_SHORT` | `reelWatchEndpoint` | 913 |
+  | `LOCKUP_CONTENT_TYPE_MUSIC` | `watchEndpoint`, videoId == contentId | 160 |
+  | `LOCKUP_CONTENT_TYPE_VIDEO` | `watchEndpoint`, videoId == contentId | 159 |
+  | `LOCKUP_CONTENT_TYPE_CHANNEL` / `_ALBUM` / `_SHOW` / `_PODCAST` | `browseEndpoint` | 24 |
+  | `LOCKUP_CONTENT_TYPE_PLAYLIST` | `watchEndpoint` on its first video (videoId ≠ contentId), or `browseEndpoint` | 11 |
+
+  Music videos are `_MUSIC`, so filtering on `_VIDEO` drops every one of them (an artist search
+  comes back almost entirely `_MUSIC`). The test the app uses is the tap command: a `watchEndpoint`
+  for the cell's own `contentId`. That admits exactly the `_VIDEO` and `_MUSIC` rows above.
 - title: `metadata.lockupMetadataViewModel.title.content` — a plain string, no `runs`/`simpleText`
 - channel: `metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0]
   .metadataParts[0].text.content` (later rows are view count and age)
@@ -223,11 +236,19 @@ Because both shapes turn up in one response, cell parsing collects every known s
 single ordered pass and dedupes, rather than treating one as a fallback for the other.
 
 `tileRenderer` field paths (from SmartTube's TileItem.java):
-- videoId: `onSelectCommand.watchEndpoint.videoId`  (fallback `onSelectCommand.reelWatchEndpoint.videoId`)
+- videoId: `onSelectCommand.watchEndpoint.videoId`, or the same endpoint inside
+  `onSelectCommand.commandExecutorCommand.commands[*]` (fallback `onSelectCommand.reelWatchEndpoint.videoId`).
+  The wrapped form is what Home's "Watch together" row of live music stations uses, pairing the
+  `watchEndpoint` with a `feedbackEndpoint` (verified 2026-10-04).
 - title: `metadata.tileMetadataRenderer.title` (`.simpleText` or `.runs[*].text`)
 - channel/subtitle: `metadata.tileMetadataRenderer.lines[*].lineRenderer.items[*].lineItemRenderer.text` (`.runs`/`.simpleText`)
 - thumbnail(s): `header.tileHeaderRenderer.thumbnail.thumbnails[*].url` (pick the largest)
 - contentType filter: `contentType == "TILE_CONTENT_TYPE_VIDEO"` (skip channels/playlists)
+- ads: an in-feed ad is a `tileRenderer` with no `contentType`, served inside an
+  `adSlotRenderer` (`…adSlotRenderer.fulfillmentContent.fulfilledLayout.inFeedAdLayoutRenderer.renderingContent`)
+  in the middle of an ordinary shelf. Its select command is a `commandExecutorCommand` wrapping
+  a `watchEndpoint`, the same shape as a station's, so the app skips the `adSlotRenderer`
+  subtree rather than trying to recognise the cell.
 
 Parsing MUST be defensive: walk recursively and collect every `tileRenderer` that has a
 `watchEndpoint.videoId`, rather than relying on the exact nesting (nesting varies by row type).
