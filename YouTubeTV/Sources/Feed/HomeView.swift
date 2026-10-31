@@ -293,7 +293,7 @@ struct HomeView: View {
         } else if let errorMessage {
             errorView(errorMessage)
         } else {
-            feedRows
+            revealingPendingCard(feedRows)
         }
     }
 
@@ -579,8 +579,9 @@ struct HomeView: View {
         // button is about to drop, and the banner has to be out of the running before then.
         isApplyingRefresh = true
 
-        sections = page.sections
-        dismissals = HomeDismissals()
+        // Fetched in the background, maybe before something was dismissed: filtered, and the
+        // dismissals kept for its continuations.
+        sections = undismissed(page.sections)
         continuation = page.continuation
         pagesLoaded = 1
         lastLoaded = .now
@@ -631,7 +632,7 @@ struct HomeView: View {
 
             pagesLoaded += 1
             // A page requested before a dismissal can carry what was dismissed.
-            let fresh = newSections(in: page.sections.map { $0.removing(where: dismissals.covers) })
+            let fresh = newSections(in: undismissed(page.sections))
             sections.append(contentsOf: fresh)
             // If a page adds nothing, stop — the trigger row would otherwise stay last and
             // refire on every scroll, paging forever with no visible progress.
@@ -832,7 +833,8 @@ extension HomeView {
             },
             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
             firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil,
-            cardFocus: $focusedCardID
+            cardFocus: $focusedCardID,
+            scrollTarget: cardToReveal(in: section)
         )
         .onAppear { prefetchIfNeeded(from: section) }
     }
@@ -861,8 +863,7 @@ extension HomeView {
     fileprivate func remove(_ video: VideoItem, _ kind: VideoDismissal) {
         dismissals.add(video, kind)
         let neighbour = neighbour(of: video, inRow: menuRowID, keeping: { !dismissals.covers($0) })
-        // A row emptied by this would stand as a heading over nothing.
-        sections = sections.map { $0.removing(where: dismissals.covers) }.filter { !$0.items.isEmpty }
+        sections = undismissed(sections)
         // The focused card is the one that went, and tvOS doesn't pick another: focus would be
         // nowhere until the next press.
         pendingCardFocus = neighbour
@@ -873,15 +874,50 @@ extension HomeView {
     /// Asked over and over, like the hand-off after a refresh: the menu's dialog is still on its
     /// way out when the card goes, and while it holds focus a request is accepted and dropped.
     /// A second and a half of tries, which outlasts the dialog's exit.
+    ///
+    /// Done only once the card has held focus for two checks in a row: a request the dialog
+    /// drops can still read back as granted until the next update, and stopping on that would
+    /// let the news strip take focus again with nothing focused.
     fileprivate func handFocus(to id: String?) async {
         guard let id else { return }
         focusedCardID = nil
-        for _ in 0..<15 where focusedCardID != id {
-            focusedCardID = id
+        var confirmations = 0
+        for _ in 0..<15 where confirmations < 2 {
+            if focusedCardID == id {
+                confirmations += 1
+            } else {
+                confirmations = 0
+                focusedCardID = id
+            }
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
         }
         pendingCardFocus = nil
+    }
+
+    /// `sections` without anything dismissed, and without the rows that leaves empty — a row
+    /// emptied of its cards would stand as a heading over nothing.
+    fileprivate func undismissed(_ sections: [FeedSection]) -> [FeedSection] {
+        sections.map { $0.removing(where: dismissals.covers) }.filter { !$0.items.isEmpty }
+    }
+
+    /// The card in this row that focus is on its way to, by video id — for the row to scroll
+    /// it into view first. See `FeedRow.scrollTarget`.
+    fileprivate func cardToReveal(in section: FeedSection) -> String? {
+        let prefix = FeedRow.focusKey(row: section.id, video: "")
+        guard let key = pendingCardFocus, key.hasPrefix(prefix) else { return nil }
+        return String(key.dropFirst(prefix.count))
+    }
+
+    /// Scrolls the feed to the row focus is on its way to: Home's rows are lazy too, and one
+    /// that isn't on screen may not have been built.
+    fileprivate func revealingPendingCard(_ rows: some View) -> some View {
+        ScrollViewReader { proxy in
+            rows.onChange(of: pendingCardFocus) { _, key in
+                guard let row = sections.first(where: { cardToReveal(in: $0) != nil }) else { return }
+                if key != nil { withAnimation { proxy.scrollTo(row.id) } }
+            }
+        }
     }
 
     /// Where focus goes when `video` is taken away from `rowID`, as a `FeedRow.focusKey`: the
