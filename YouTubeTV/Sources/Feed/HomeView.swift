@@ -677,7 +677,8 @@ struct HomeView: View {
             // leak an entry the reset above can no longer reach.
             // Same for a Home row's next page. The supplementary rows were never filtered.
             let isHomeRow = sections.contains { $0.id == id }
-            let shown = section.items.count
+            // Read now, not from `section`: a dismissal during the request may have shrunk the row.
+            let shown = self.section(withID: id)?.items.count
             if append(
                 page.items, continuation: page.continuation, to: id, dropping: isHomeRow ? dismissals.covers : nil)
             {
