@@ -3,6 +3,10 @@ import SwiftUI
 /// The comments panel the player's "Comments" button brings up: a partly transparent column
 /// pinned to the right edge of the screen, over video that keeps playing.
 ///
+/// The video's description rides along as a collapsed card at the top of the top-level list —
+/// it's where the uploader's links live, and the comments are where a viewer already goes to
+/// read more about a video. Select unfolds it in place; see `PinnedDescriptionCard`.
+///
 /// Two levels deep, mirroring YouTube's flat reply threads: the top-level list, and one
 /// comment's replies with that comment pinned above them. Select on a comment with replies
 /// goes down a level; Menu comes back up, and closes the overlay from the top level (the
@@ -10,6 +14,11 @@ import SwiftUI
 struct CommentsOverlayView: View {
     let videoId: String
     var onClose: () -> Void
+
+    /// The video's description, once the watch page is in — see `loadedTopLevel()`. Stays `nil`
+    /// if that fetch fails, which leaves the failure notice on its own.
+    @State private var description: VideoDescription?
+    @State private var isDescriptionExpanded = false
 
     /// The comment whose replies are on screen; `nil` while the top-level list is.
     @State private var parent: CommentItem?
@@ -29,6 +38,7 @@ struct CommentsOverlayView: View {
     /// screen at once, but they would still be the same focus target.
     private enum Row: Hashable {
         case pinnedParent
+        case description
         case comment(String)
         case loadMore
     }
@@ -71,7 +81,7 @@ struct CommentsOverlayView: View {
                 if !Task.isCancelled { replies = result }
             } else if topLevel.comments.isEmpty {
                 topLevel.isLoading = true
-                let result = await loaded(CommentList(), fromVideo: videoId)
+                let result = await loadedTopLevel()
                 if !Task.isCancelled { topLevel = result }
             }
         }
@@ -104,16 +114,25 @@ struct CommentsOverlayView: View {
     @ViewBuilder
     private var list: some View {
         let current = parent == nil ? topLevel : replies
-        if current.comments.isEmpty && current.isLoading {
+        // With the description card to show, the list stands even while the comments under it
+        // are loading or missing — a video with comments turned off still has its description.
+        let showsCard = parent == nil && description != nil
+        if current.comments.isEmpty && current.isLoading && !showsCard {
             ProgressView()
                 .tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if current.comments.isEmpty && current.loadFailed {
+        } else if current.comments.isEmpty && current.loadFailed && !showsCard {
             failureNotice
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
+                        if parent == nil, let description {
+                            descriptionRows(description)
+                            if current.comments.isEmpty {
+                                commentsPlaceholder(current)
+                            }
+                        }
                         if let parent {
                             // The comment being replied to, pinned above its replies for context.
                             CommentRow(comment: parent, showsReplyCount: false, action: nil)
@@ -150,6 +169,45 @@ struct CommentsOverlayView: View {
                     if let focusOnReturn { await restoreFocus(to: focusOnReturn, using: proxy) }
                 }
             }
+        }
+    }
+
+    /// The card, and — once unfolded — the text and links below it as rows of their own, so
+    /// focus walks through them and scrolls the list the way it does through comments.
+    @ViewBuilder
+    private func descriptionRows(_ description: VideoDescription) -> some View {
+        PinnedDescriptionCard(description: description, isExpanded: isDescriptionExpanded) {
+            isDescriptionExpanded.toggle()
+        }
+        .focused($focusedRow, equals: .description)
+        if isDescriptionExpanded {
+            ForEach(description.paragraphs) { paragraph in
+                DescriptionParagraphRow(paragraph: paragraph)
+            }
+            if !description.webLinks.isEmpty {
+                Text("Links")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.top, 8)
+            }
+            ForEach(description.webLinks) { link in
+                DescriptionLinkRow(link: link)
+            }
+        }
+        Divider().background(.white.opacity(0.3))
+    }
+
+    /// Stands in for the comments below the description card until there are some.
+    @ViewBuilder
+    private func commentsPlaceholder(_ list: CommentList) -> some View {
+        if list.isLoading {
+            ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, 40)
+        } else if list.loadFailed {
+            Text("Comments couldn't be loaded.")
+                .font(.system(size: 24))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
         }
     }
 
@@ -212,11 +270,19 @@ struct CommentsOverlayView: View {
         return list
     }
 
-    private func loaded(_ list: CommentList, fromVideo videoId: String) async -> CommentList {
-        var list = list
+    /// The first page of top-level comments, and the description from the same watch page. The
+    /// description is published before the comments are looked for, so a video with comments
+    /// turned off still gets its card.
+    private func loadedTopLevel() async -> CommentList {
+        var list = CommentList()
         list.isLoading = true
         do {
-            let page = try await CommentService().topLevelComments(videoId: videoId)
+            let service = CommentService()
+            let watchPage = try await service.watchPage(videoId: videoId)
+            if description == nil {
+                description = DescriptionService().description(inWatchPage: watchPage)
+            }
+            let page = try await service.topLevelComments(inWatchPage: watchPage)
             list.comments += page.comments
             list.continuation = page.continuation
             list.loadFailed = false
@@ -365,7 +431,7 @@ private struct LoadMoreRow: View {
 
 /// Keeps the label exactly as drawn — the row draws its own focus treatment, and the default
 /// tvOS button chrome (white platter, lift) would fight the translucent panel.
-private struct CommentRowButtonStyle: ButtonStyle {
+struct CommentRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
