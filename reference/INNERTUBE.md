@@ -303,6 +303,27 @@ are flat, so replies never have reply tokens of their own). Paging is a trailing
 on a thread carry no token, so the one `continuationCommand` under a thread's `replies` is always
 the right one. No comment count was found anywhere in these responses.
 
+### Description — the same `next {"videoId"}` response
+
+Verified 2026-10-31. Step 1's watch response also carries the description, with its links:
+
+```
+videoPrimaryInfoRenderer
+  .title.runs[*].text                     the title
+  .viewCount.videoViewCountRenderer.viewCount.simpleText   "1,832,308,056 views"
+  .relativeDateText.simpleText            "17 years ago"
+videoSecondaryInfoRenderer
+  .owner.videoOwnerRenderer.title.runs    channel name
+  .attributedDescription.content          the full description, plain text
+  .attributedDescription.commandRuns[*]   one per link:
+    .startIndex / .length                 UTF-16 offsets into `content` (an emoji counts 2)
+    .onTap.innertubeCommand.urlEndpoint.url        outside link, as youtube.com/redirect?…&q=<target>
+    .onTap.innertubeCommand.watchEndpoint.startTimeSeconds   a timestamp in this video
+    .onTap.innertubeCommand.browseEndpoint         hashtag or channel mention
+```
+
+The redirect's `redir_token` expires, so the app unwraps `q` and shows the real target.
+
 ## PLAYBACK — `player` (VISIONOS client, unauthenticated)
 
 `POST https://www.youtube.com/youtubei/v1/player?key=...` body:
