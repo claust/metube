@@ -81,11 +81,17 @@ struct DescriptionService {
         return DescriptionLink(range: range, display: display, kind: kind)
     }
 
+    private static let youTubeHosts: Set = ["www.youtube.com", "youtube.com", "m.youtube.com"]
+
     /// YouTube routes outside links through `youtube.com/redirect?q=<target>`; the target is
     /// what belongs on a phone, not a bounce that expires with its token.
     private func unwrapped(_ raw: String) -> URL? {
         guard let components = URLComponents(string: raw) else { return nil }
-        if components.path == "/redirect",
+        // YouTube's own bounce only: an uploader's link to some other site's `/redirect` is
+        // exactly where it points. Relative counts as YouTube's, since that is what a host-less
+        // URL in a YouTube response is.
+        let isYouTube = components.host.map { Self.youTubeHosts.contains($0.lowercased()) } ?? true
+        if isYouTube, components.path == "/redirect",
             let target = components.queryItems?.first(where: { $0.name == "q" })?.value
         {
             return URL(string: target)
