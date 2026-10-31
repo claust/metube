@@ -12,9 +12,8 @@ struct NewsService {
 
     /// Headlines from every given source, newest first, interleaved by publication date.
     ///
-    /// A source that fails is dropped rather than failing the whole banner — with one outlet
-    /// that means an empty banner, but the moment there are two, one being down must not take
-    /// the other's headlines off screen with it.
+    /// A source that fails is dropped rather than failing the whole banner: one outlet being
+    /// down must not take the other's headlines off screen with it.
     func headlines(from sources: [NewsSource] = NewsSource.allCases) async -> [NewsItem] {
         var collected: [NewsItem] = []
         await withTaskGroup(of: [NewsItem].self) { group in
@@ -35,12 +34,25 @@ struct NewsService {
         var request = URLRequest(url: source.feedURL)
         // The feed is refetched on a schedule, and a cached body is exactly as good as a fresh
         // one within the feed's own `<ttl>`. Left on the default policy so URLSession honours it.
-        request.setValue("application/rss+xml, application/xml", forHTTPHeaderField: "Accept")
+        switch source {
+        case .bbc:
+            request.setValue("application/rss+xml, application/xml", forHTTPHeaderField: "Accept")
+        case .dr:
+            // A page, not a feed — and served whole only to a browser, like the article pages.
+            request.setValue(ArticleService.userAgent, forHTTPHeaderField: "User-Agent")
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw NewsError.feedUnavailable(source)
         }
-        let items = RSSFeedParser(source: source).parse(data)
+        let parsed: [NewsItem]
+        switch source {
+        case .bbc: parsed = RSSFeedParser(source: source).parse(data)
+        case .dr: parsed = String(bytes: data, encoding: .utf8).map(DRLatestNewsParser.items) ?? []
+        }
+        // Sport is dropped before the cut rather than after, so an evening of match reports
+        // doesn't leave an outlet with half its share of the banner.
+        let items = parsed.filter { !source.isSport($0.link) }
         return Array(items.prefix(Self.itemsPerSource))
     }
 }
@@ -193,5 +205,113 @@ private final class RSSFeedParser: NSObject, XMLParserDelegate {
             imageURL: URL(string: fields.imageURL),
             publishedAt: dateFormatter.date(from: fields.pubDate)
         )
+    }
+}
+
+/// Reads DR's "Seneste nyt" page into `NewsItem`s.
+///
+/// The page is a Next.js app, and the list it renders arrives with it as data: a
+/// `self.__next_f.push([1,"…"])` call whose string holds the page's component tree, in which
+/// the `LatestNewsPage` component carries `"publications":[…]` — one `{"content":{…}}` per
+/// story, newest first, with title, path, ISO start date, summary, section and teaser picture.
+/// Read from there rather than from the rendered cards, whose times are "11 min. siden" and
+/// whose pictures are buried in `srcset`s.
+enum DRLatestNewsParser {
+    private static let base = URL(string: "https://www.dr.dk")!
+
+    /// Formats that are not something to read: a reel is a vertical video with a caption, and
+    /// opening one in the reading panel would show nothing but its headline.
+    private static let skippedFormats: Set<String> = ["ReelsFormat"]
+
+    /// The teaser picture at a size worth showing in the reading panel. DR's image service takes
+    /// the crop in the query string, and the bare URL in the data is the full-size original,
+    /// several megabytes for a 430-point frame.
+    ///
+    /// Exactly the variant DR's own pages ask for on a high-resolution screen, query and all.
+    /// The service renders each size the first time it is asked for — seconds, sometimes tens of
+    /// them — and serves it in a tenth of a second after that, so a size the website has already
+    /// asked for is often ready. One of our own invention never is.
+    private static let pictureQuery = "im=SmartCrop%2Csize%3D%28960%2C540%29&impolicy=mediumlow"
+
+    static func items(in html: String) -> [NewsItem] {
+        guard let publications = publications(in: html) else { return [] }
+        let dates = ISO8601DateFormatter()
+        return publications.compactMap { entry in
+            guard let content = entry["content"] as? [String: Any],
+                let title = content["title"] as? String, !title.isEmpty,
+                let path = content["urlPathId"] as? String,
+                // Absolute for stories filed elsewhere on dr.dk (sport's live blogs), a path for
+                // the rest.
+                let link = URL(string: path, relativeTo: base)?.absoluteURL
+            else { return nil }
+            if let format = content["format"] as? String, skippedFormats.contains(format) {
+                return nil
+            }
+            let picture =
+                ((content["teaserImage"] as? [String: Any])?["default"]
+                as? [String: Any])?["url"] as? String
+            return NewsItem(
+                id: content["urn"] as? String ?? link.absoluteString,
+                source: .dr,
+                title: title,
+                summary: content["summary"] as? String ?? "",
+                link: link,
+                imageURL: picture.flatMap { URL(string: "\($0)?\(pictureQuery)") },
+                publishedAt: (content["startDate"] as? String).flatMap { dates.date(from: $0) }
+            )
+        }
+    }
+
+    /// The page's `publications` array, or `nil` if the page no longer has that shape.
+    private static func publications(in html: String) -> [[String: Any]]? {
+        // Every push's string, decoded and joined: the tree can be split across several, and a
+        // split may fall anywhere — mid-array included.
+        let tree = html.matches(of: #/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/#)
+            .compactMap { match in
+                try? JSONSerialization.jsonObject(
+                    with: Data(match.output.1.utf8), options: [.fragmentsAllowed]) as? String
+            }
+            .joined()
+        guard let page = tree.range(of: #""name":"LatestNewsPage""#),
+            let key = tree[page.upperBound...].range(of: #""publications":["#),
+            // From the `[` the key search ended on, so the array opens at the start.
+            let array = balancedJSON(from: tree[tree.index(before: key.upperBound)...]),
+            let decoded = try? JSONSerialization.jsonObject(with: Data(array.utf8))
+        else { return nil }
+        return decoded as? [[String: Any]]
+    }
+
+    /// The JSON array that opens at the start of `text` — which must begin with its `[` — cut at
+    /// the bracket that closes it. The tree goes on after it in a format of its own, so the decoder can't simply
+    /// be pointed at the rest; brackets inside strings don't count.
+    private static func balancedJSON(from text: Substring) -> Substring? {
+        var depth = 0
+        var inString = false
+        var isEscaped = false
+        for index in text.indices {
+            let character = text[index]
+            // Only ever set inside a string, so it needs no check of `inString` of its own.
+            if isEscaped {
+                isEscaped = false
+                continue
+            }
+            if inString {
+                if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            switch character {
+            case "\"": inString = true
+            case "[", "{": depth += 1
+            case "]", "}":
+                depth -= 1
+                if depth == 0 { return text[...index] }
+            default: break
+            }
+        }
+        return nil
     }
 }

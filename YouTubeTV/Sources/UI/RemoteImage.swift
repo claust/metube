@@ -181,6 +181,18 @@ actor ImageCache {
         }
     }
 
+    /// Starts fetching each of these, without waiting for any of them, so that a view asking
+    /// later finds the image in memory or joins the download already under way.
+    ///
+    /// For pictures that will be wanted soon but aren't on screen yet — the news panel's, whose
+    /// story only appears once someone stops the ticker on it. A failure here is nobody's
+    /// problem: the view that eventually asks tries again on its own.
+    nonisolated func prefetch(_ urls: [URL]) {
+        for url in urls {
+            Task { _ = try? await image(for: url) }
+        }
+    }
+
     /// Whatever is already in memory for `url`, without going near the network. Lets a view being
     /// rebuilt draw its image in the same frame — see `RemoteImage.init`.
     nonisolated func cached(for url: URL) -> Image? {

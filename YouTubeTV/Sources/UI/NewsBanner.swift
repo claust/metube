@@ -44,7 +44,7 @@ struct NewsBanner: View {
 
     private static let height: CGFloat = 76
 
-    /// BBC-ticker yellow. Warm rather than lemon, so black text on it stays high-contrast.
+    /// News-ticker yellow. Warm rather than lemon, so black text on it stays high-contrast.
     private static let bannerYellow = Color(red: 0.98, green: 0.80, blue: 0.09)
 
     /// Width of each headline cell, by item id, filled as the cells lay out.
@@ -113,6 +113,9 @@ struct NewsBanner: View {
     /// The article body for the story on screen, in paragraphs. Empty while it is being fetched
     /// and for a page that has none to give.
     @State private var articleBody: [ArticleBlock] = []
+    /// The picture on the story's page, for a story whose feed item came without one. Fetched
+    /// with the body, so it is `nil` at the same moments the body is empty.
+    @State private var articleImageURL: URL?
     @State private var isLoadingArticle = false
 
     /// The picture-and-standfirst column beside the article text.
@@ -269,17 +272,17 @@ struct NewsBanner: View {
     /// The story the strip is stopped on, shown while the banner holds focus.
     ///
     /// The picture and the standfirst come from the feed; the text beside them is the article
-    /// itself, fetched from the outlet's page — see `ArticleService`.
+    /// itself, fetched from the outlet's page — see `ArticleService`. A feed item without a
+    /// picture borrows the page's, and a page without one gets the outlet's name instead.
     private func storyPanel(_ item: NewsItem) -> some View {
         HStack(alignment: .top, spacing: 36) {
             VStack(alignment: .leading, spacing: 18) {
-                RemoteImage(url: item.largeImageURL) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Color.white.opacity(0.07)
-                    }
-                }
+                StoryPicture(
+                    url: item.largeImageURL ?? articleImageURL,
+                    source: item.source,
+                    isLoading: isLoadingArticle,
+                    yellow: Self.bannerYellow
+                )
                 .frame(width: Self.railWidth, height: 242)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
@@ -489,13 +492,32 @@ struct NewsBanner: View {
         return focus == .step(last)
     }
 
+    /// The outlet of the headline at the left edge, so a story is attributed to whoever wrote
+    /// it as it passes rather than to whichever outlet happens to lead the feed.
+    ///
+    /// Driven by its own timeline rather than sharing the marquee's: the name changes a few
+    /// times a lap, and the black box must not be redrawn sixty times a second to show the same
+    /// word. A quarter-second check is too quick for the switch to visibly lag the headline.
     private var badge: some View {
-        Text(items.first?.source.displayName ?? "NEWS")
-            .font(.system(size: 26, weight: .heavy, design: .rounded))
-            .foregroundStyle(Self.bannerYellow)
-            .padding(.horizontal, 28)
-            .frame(maxHeight: .infinity)
-            .background(.black)
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let current = item(atDistance: distance(at: context.date))?.source
+            // Every outlet's name is laid out and all but one hidden, so the box is always as
+            // wide as the longest of them — a badge that resized as the name changed would
+            // shove the whole strip sideways under the headline being read.
+            ZStack {
+                ForEach(NewsSource.allCases) { source in
+                    Text(source.displayName)
+                        .opacity(source == current ? 1 : 0)
+                }
+                Text("NEWS").opacity(current == nil ? 1 : 0)
+            }
+            .animation(.smooth(duration: 0.2), value: current)
+        }
+        .font(.system(size: 26, weight: .heavy, design: .rounded))
+        .foregroundStyle(Self.bannerYellow)
+        .padding(.horizontal, 28)
+        .frame(maxHeight: .infinity)
+        .background(.black)
     }
 
     private var marquee: some View {
@@ -596,13 +618,16 @@ struct NewsBanner: View {
     @MainActor
     private func loadArticle() async {
         articleBody = []
+        articleImageURL = nil
         guard let item = focusedItem, isActive else { return }
 
         isLoadingArticle = true
-        let body = await ArticleService().body(for: item)
+        let article = await ArticleService().article(for: item)
         isLoadingArticle = false
         // The user stepped on while this was in flight; that story's own fetch owns the panel.
         guard !Task.isCancelled, focusedItem?.id == item.id else { return }
+        let body = article.blocks
+        articleImageURL = article.imageURL
         // Nothing came back — an index page, or a layout we no longer recognise. The feed's
         // one-line summary is what there is, so show that as the body.
         articleBody =
@@ -659,8 +684,13 @@ struct NewsBanner: View {
     /// edge, so this answers with the first headline rather than nothing: the panel opens on a
     /// real story either way, and the chip lands on it once the widths arrive.
     private var focusedItem: NewsItem? {
+        item(atDistance: distance(at: Date()))
+    }
+
+    /// The headline at the left edge once the strip has travelled this far.
+    private func item(atDistance distance: CGFloat) -> NewsItem? {
         guard laneWidth != nil else { return items.first }
-        let position = wrapped(distance(at: Date()))
+        let position = wrapped(distance)
         return items.indices.contains(index(at: position)) ? items[index(at: position)] : items.first
     }
 
@@ -705,6 +735,37 @@ struct NewsBanner: View {
             base = destination
         } else {
             withAnimation(.smooth(duration: 0.3)) { base = destination }
+        }
+    }
+}
+
+/// The picture beside a story: the feed's, or the one on the story's page. A story with no
+/// picture anywhere gets the outlet's name in the ticker's colours, rather than an empty box
+/// that looks like an image that failed to load.
+private struct StoryPicture: View {
+    var url: URL?
+    var source: NewsSource
+    /// Whether the page — and with it a picture the feed didn't have — is still on its way.
+    var isLoading: Bool
+    var yellow: Color
+
+    var body: some View {
+        if let url {
+            RemoteImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    Color.white.opacity(0.07)
+                }
+            }
+        } else if isLoading {
+            Color.white.opacity(0.07)
+        } else {
+            Text(source.displayName)
+                .font(.system(size: 44, weight: .heavy, design: .rounded))
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(yellow)
         }
     }
 }
