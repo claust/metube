@@ -13,11 +13,13 @@ struct DescriptionParagraph: Identifiable {
 }
 
 extension VideoDescription {
-    /// The most a row may hold, in UTF-16 units. Each block is its own focusable row because
-    /// focus is what scrolls on tvOS, so a row taller than the panel would never show its end:
-    /// at the card's 24pt in the 560pt-wide column this is about a dozen lines, well under the
-    /// panel's height.
+    /// The most a row may hold, in UTF-16 units and in lines. Each block is its own focusable
+    /// row because focus is what scrolls on tvOS, so a row taller than the panel would never show
+    /// its end. Both limits are needed: 500 units of prose wraps to about a dozen lines at the
+    /// card's 24pt in the 560pt-wide column, while a chapter list of short `00:00 Intro` lines
+    /// can run to forty lines inside the same 500.
     static let maxBlockLength = 500
+    static let maxBlockLines = 10
 
     /// The description cut at blank lines, with any block still too long for one row cut again
     /// — see `chunks(of:)`.
@@ -38,22 +40,29 @@ extension VideoDescription {
         }
     }
 
-    /// `range` in pieces of at most `maxBlockLength`, cut at the last line break that fits, else
-    /// the last sentence end, else the last space — a chapter list stays whole lines and prose
-    /// whole sentences. A cut never lands inside a link, so every link stays tintable.
+    /// `range` in pieces of at most `maxBlockLength` units and `maxBlockLines` lines, cut at the
+    /// last line break that fits, else the last sentence end, else the last space — a chapter list
+    /// stays whole lines and prose whole sentences. A cut never lands inside a link, so every link
+    /// stays tintable.
     private func chunks(of range: NSRange) -> [NSRange] {
         let whole = text as NSString
         var pieces: [NSRange] = []
         var start = range.location
         let end = range.location + range.length
-        while end - start > Self.maxBlockLength {
-            let window = NSRange(location: start, length: Self.maxBlockLength)
+        while true {
+            let lineLimit = endOfLines(from: start, before: end)
+            guard end - start > Self.maxBlockLength || lineLimit != nil else { break }
             var cut = start + Self.maxBlockLength
-            for separator in ["\n", ". ", " "] {
-                let found = whole.range(of: separator, options: .backwards, range: window)
-                if found.location != NSNotFound, found.location > start {
-                    cut = found.location + found.length
-                    break
+            if let lineLimit, lineLimit - start <= Self.maxBlockLength {
+                cut = lineLimit
+            } else {
+                let window = NSRange(location: start, length: Self.maxBlockLength)
+                for separator in ["\n", ". ", " "] {
+                    let found = whole.range(of: separator, options: .backwards, range: window)
+                    if found.location != NSNotFound, found.location > start {
+                        cut = found.location + found.length
+                        break
+                    }
                 }
             }
             if let link = links.first(where: { $0.range.location < cut && cut < NSMaxRange($0.range) }),
@@ -75,6 +84,19 @@ extension VideoDescription {
         }
         pieces.append(NSRange(location: start, length: end - start))
         return pieces
+    }
+
+    /// Just past the `maxBlockLines`-th line break after `start`, when that falls before `end` —
+    /// that is, where a row must end for its lines to fit. `nil` when they already do.
+    private func endOfLines(from start: Int, before end: Int) -> Int? {
+        let whole = text as NSString
+        var location = start
+        for _ in 0..<Self.maxBlockLines {
+            let found = whole.range(of: "\n", range: NSRange(location: location, length: end - location))
+            guard found.location != NSNotFound else { return nil }
+            location = NSMaxRange(found)
+        }
+        return location < end ? location : nil
     }
 
     private func isSpace(at index: Int) -> Bool {
