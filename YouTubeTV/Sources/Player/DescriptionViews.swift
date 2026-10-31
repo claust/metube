@@ -42,8 +42,8 @@ extension VideoDescription {
 
     /// `range` in pieces of at most `maxBlockLength` units and `maxBlockLines` lines, cut at the
     /// last line break that fits, else the last sentence end, else the last space — a chapter list
-    /// stays whole lines and prose whole sentences. A cut never lands inside a link, so every link
-    /// stays tintable.
+    /// stays whole lines and prose whole sentences. A cut avoids landing inside a link, unless the
+    /// link alone is longer than a row.
     private func chunks(of range: NSRange) -> [NSRange] {
         let whole = text as NSString
         var pieces: [NSRange] = []
@@ -107,8 +107,12 @@ extension VideoDescription {
     private func attributed(_ range: NSRange) -> AttributedString {
         let piece = (text as NSString).substring(with: range)
         var result = AttributedString(piece)
-        for link in links where NSIntersectionRange(link.range, range).length == link.range.length {
-            let local = NSRange(location: link.range.location - range.location, length: link.range.length)
+        // The part of each link inside this block: a link longer than a whole row (see
+        // `chunks(of:)`) is split across rows, and each half still reads as a link.
+        for link in links {
+            let overlap = NSIntersectionRange(link.range, range)
+            guard overlap.length > 0 else { continue }
+            let local = NSRange(location: overlap.location - range.location, length: overlap.length)
             guard let bounds = Range(local, in: piece),
                 let lower = AttributedString.Index(bounds.lowerBound, within: result),
                 let upper = AttributedString.Index(bounds.upperBound, within: result)
