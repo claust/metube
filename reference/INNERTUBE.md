@@ -402,6 +402,27 @@ Clients confirmed SABR-only or otherwise unusable as of 2026-07-26: `IOS` 21.26.
 those carry an `n` throttle param and **403 on every request** until it is solved by running
 YouTube's `base.js` — which is exactly why SmartTube embeds a V8 engine. VISIONOS avoids this.
 
+## NOT INTERESTED — `get_panel` + `feedback` (TVHTML5 + Bearer token)
+
+Verified 2026-10-31. "Not interested" and "Don't recommend channel" are both `feedback` with an
+opaque per-video, per-action token — it can't be built from the videoId, so it has to come from
+the cell's long-press menu, which arrives in one of two shapes:
+
+- **Home tiles** carry no menu. `tileRenderer.onLongPressCommand` is a
+  `showEngagementPanelEndpoint` with `identifier.tag = "PAcontext_menu"`; fetch the menu with
+  `get_panel` and `{"panelId":"PAcontext_menu","params":"<globalConfiguration.params>"}`
+  (params alone, or the endpoint passed whole, both 400). The reply's
+  `content.engagementPanelSectionListRenderer.content.listViewModel.listItems[*].listItemViewModel`
+  are Play / Save to Watch later / Save to playlist / Go to channel / Not interested /
+  Don't recommend channel, titled by `title.content`.
+- **Older row pages** carry it inline: `onLongPressCommand.showMenuCommand.menu.menuRenderer.items[*]`
+  as `menuServiceItemRenderer`s, titled by `text`.
+
+Either way the token is the `feedbackEndpoint.feedbackToken` under the item ("Don't recommend
+channel" nests it behind a Confirm popup). Send it with `feedback` and
+`{"feedbackTokens":["<token>"]}`; the reply's `feedbackResponses[*].isProcessed` says whether it
+took, and may carry an optional "Tell us why" `dismissalFollowUpRenderer`.
+
 ## NOTES / constraints
 - Playback tops out at 1080p60 on real hardware — a codec-availability wall, not a code limit.
 - Age-restricted / login-required videos may not play via the unauth clients; that's an accepted limitation.

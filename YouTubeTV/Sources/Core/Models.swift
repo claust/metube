@@ -30,11 +30,15 @@ struct VideoItem: Identifiable, Hashable {
     /// `var` so a row known to be a Shorts row can vouch for items its cells didn't label
     /// (see `asShort()`).
     var isShort: Bool
+    /// How the card's menu gets its "Not interested" and "Don't recommend channel", when the
+    /// cell offered them — see `VideoFeedback`.
+    let feedback: VideoFeedback?
 
     init(
         id: String, title: String, author: String = "", channelID: String? = nil,
         thumbnailURL: URL? = nil, channelAvatarURL: URL? = nil, publishedAt: Date? = nil,
-        viewCount: String = "", duration: String = "", isShort: Bool = false
+        viewCount: String = "", duration: String = "", isShort: Bool = false,
+        feedback: VideoFeedback? = nil
     ) {
         self.id = id
         self.title = title
@@ -46,6 +50,7 @@ struct VideoItem: Identifiable, Hashable {
         self.viewCount = viewCount
         self.duration = duration
         self.isShort = isShort
+        self.feedback = feedback
     }
 
     /// This item, marked as a Short.
@@ -137,6 +142,14 @@ struct FeedSection: Identifiable, Hashable {
         self.items = items
         self.continuation = continuation
         self.isShorts = isShorts
+    }
+
+    /// The same row without the items `shouldRemove` picks out. Keeps the id and the
+    /// continuation, so the row stays where it is and still pages.
+    func removing(where shouldRemove: (VideoItem) -> Bool) -> FeedSection {
+        FeedSection(
+            id: id, title: title, items: items.filter { !shouldRemove($0) },
+            continuation: continuation, isShorts: isShorts)
     }
 
     /// Items from this row's continuation, shaped to what this row shows: a Shorts row vouches

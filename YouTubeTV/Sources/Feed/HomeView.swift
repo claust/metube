@@ -49,6 +49,19 @@ struct HomeView: View {
     /// heading.
     @FocusState private var isFirstCardFocused: Bool
 
+    /// The row the open menu's card is in. Home lets a video into two shelves, so the video
+    /// alone doesn't say which card the user pressed — and so where focus goes once it's gone.
+    @State private var menuRowID: String?
+
+    /// Which of Home's own cards has focus, by `FeedRow.focusKey`. Only ever set to hand focus
+    /// to the card beside one that was just taken away — see `remove`.
+    @FocusState private var focusedCardID: String?
+    /// That card, while focus is still on its way to it.
+    @State private var pendingCardFocus: String?
+
+    /// What the user has said they're not interested in since this feed was loaded.
+    @State private var dismissals = HomeDismissals()
+
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -174,7 +187,8 @@ struct HomeView: View {
 
             content
         }
-        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel)
+        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel, onDismiss: remove)
+        .task(id: pendingCardFocus) { await handFocus(to: pendingCardFocus) }
         .task {
             // Load once on first appear.
             if sections.isEmpty && !isLoading {
@@ -279,7 +293,7 @@ struct HomeView: View {
         } else if let errorMessage {
             errorView(errorMessage)
         } else {
-            feedRows
+            revealingPendingCard(feedRows)
         }
     }
 
@@ -295,7 +309,9 @@ struct HomeView: View {
                             onNewsActiveChange($0)
                         },
                         onDismiss: { isHandingBackFocus = true },
-                        canTakeFocus: !isApplyingRefresh
+                        // Also kept out while a dismissed card's neighbour is being focused:
+                        // focus is on nothing then, and tvOS hands it to the topmost view.
+                        canTakeFocus: !isApplyingRefresh && pendingCardFocus == nil
                     )
                     .padding(.horizontal, Metrics.horizontalInset)
                     // Clears the clock, which floats over this screen's top-right corner
@@ -460,6 +476,7 @@ struct HomeView: View {
                 return false  // cancelled or signed out — nothing to show and nothing to report
             }
             sections = page.sections
+            dismissals = HomeDismissals()
             continuation = page.continuation
             pagesLoaded = 1
             if isFirstLoad { isApplyingRefresh = true }
@@ -566,13 +583,16 @@ struct HomeView: View {
         // button is about to drop, and the banner has to be out of the running before then.
         isApplyingRefresh = true
 
-        sections = page.sections
+        // Fetched in the background, maybe before something was dismissed: filtered, and the
+        // dismissals kept for its continuations.
+        sections = undismissed(page.sections)
         continuation = page.continuation
         pagesLoaded = 1
         lastLoaded = .now
         // The feed the tiles were cut from has just been replaced, so cut them again — the
-        // whole point of this button is that Home now leads with different videos.
-        updateTopShelf(from: page.sections)
+        // whole point of this button is that Home now leads with different videos. From the
+        // filtered rows, so a dismissed video doesn't come back on the Top Shelf.
+        updateTopShelf(from: sections)
         // Same reason as the first load: every row id is new, so state keyed to the old ones
         // would point at rows that no longer exist.
         rowsLoadingMore = []
@@ -616,11 +636,18 @@ struct HomeView: View {
             else { return }
 
             pagesLoaded += 1
+            // A page requested before a dismissal can carry what was dismissed. It's filtered
+            // out only after deciding whether to page on: a page that was all dismissed cards
+            // is still progress through the feed.
             let fresh = newSections(in: page.sections)
-            sections.append(contentsOf: fresh)
+            let visible = undismissed(fresh)
+            sections.append(contentsOf: visible)
             // If a page adds nothing, stop — the trigger row would otherwise stay last and
             // refire on every scroll, paging forever with no visible progress.
             continuation = fresh.isEmpty ? nil : page.continuation
+            // A page that was all dismissed cards added no row to fire the next one, so ask now.
+            // After this returns, so `isLoadingMore` is down; `maxPages` still bounds it.
+            if visible.isEmpty, continuation != nil { Task { await loadMore() } }
         } catch {
             if isCancellation(error) { return }
             // A failed page shouldn't wipe out the feed already on screen. Give up on paging
@@ -630,17 +657,6 @@ struct HomeView: View {
     }
 
     // MARK: - Paging one row (scrolling right)
-
-    /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
-    /// only a handful of videos, so without this a row ends after five cards.
-    /// Takes an id rather than the row itself: the caller's copy can be a page behind, and
-    /// acting on its token would spawn a Task for a row that is already exhausted.
-    private func prefetchItemsIfNeeded(in id: String) {
-        guard let section = section(withID: id), section.continuation != nil,
-            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
-        else { return }
-        Task { await loadMoreItems(in: id) }
-    }
 
     /// Appends the next batch of videos to one row.
     @MainActor
@@ -664,8 +680,17 @@ struct HomeView: View {
             // Only count the page if the row is still there. A reload during the request
             // replaces every section, and re-keying this to a row that no longer exists would
             // leak an entry the reset above can no longer reach.
-            if append(page.items, continuation: page.continuation, to: id) {
+            // Same for a Home row's next page. The supplementary rows were never filtered.
+            let isHomeRow = sections.contains { $0.id == id }
+            // Read now, not from `section`: a dismissal during the request may have shrunk the row.
+            let shown = self.section(withID: id)?.items.count
+            if append(
+                page.items, continuation: page.continuation, to: id, dropping: isHomeRow ? dismissals.covers : nil)
+            {
                 rowPagesLoaded[id, default: 1] += 1
+                // Same as `loadMore`: a page of only dismissed cards adds no tail card to ask
+                // for the next. Spawned so it runs once this request has let go of the row.
+                if self.section(withID: id)?.items.count == shown { Task { prefetchItemsIfNeeded(in: id) } }
             }
         } catch {
             if isCancellation(error) { return }
@@ -674,15 +699,14 @@ struct HomeView: View {
         }
     }
 
-    private func section(withID id: String) -> FeedSection? {
-        sections.first { $0.id == id } ?? supplementarySections.first { $0.id == id }
-    }
-
     /// Adds videos to the row with this id, in whichever list holds it. Returns `false` when
     /// no such row is on screen any more — a reload replaced it while the request was in flight.
+    /// Videos `dropping` picks out are left out, but still count as the page making progress.
     @MainActor
     @discardableResult
-    private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
+    private func append(
+        _ items: [VideoItem], continuation: String?, to id: String, dropping: ((VideoItem) -> Bool)? = nil
+    ) -> Bool {
         func update(_ list: inout [FeedSection], newestFirst: Bool = false) -> Bool {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
             let section = list[index]
@@ -690,6 +714,8 @@ struct HomeView: View {
             // Shorts belong only in a Shorts row, on a page as much as on the first load — see
             // `FeedSection.admitting`.
             var fresh = section.admitting(items).filter { !existing.contains($0.id) }
+            let madeProgress = !fresh.isEmpty
+            if let dropping { fresh.removeAll(where: dropping) }
             // A chronological row's next page arrives in the order YouTube sent it, so it is put
             // in date order too — but only within itself, and it still lands at the end. Sorting
             // the row as a whole would move cards the user has already scrolled past, and take
@@ -703,7 +729,7 @@ struct HomeView: View {
                 items: section.items + fresh,
                 // A page that adds nothing new means the row is going in circles: stop, or the
                 // last card stays the trigger and refires on every scroll.
-                continuation: fresh.isEmpty ? nil : continuation,
+                continuation: madeProgress ? continuation : nil,
                 isShorts: section.isShorts
             )
             return true
@@ -716,35 +742,6 @@ struct HomeView: View {
             return true
         }
         return false
-    }
-
-    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
-    /// above the app's icon on the tvOS home screen.
-    ///
-    /// Written here, on every successful first page, because this is the only point where the
-    /// active profile's feed is known to be current — the extension has no token of its own and
-    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
-    /// first one's items means a lead shelf holding a single video still fills both tiles.
-    /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
-    /// which is neither the shape nor the metadata a Short has.
-    private func updateTopShelf(from sections: [FeedSection]) {
-        let candidates = sections.filter { !$0.isShorts }.flatMap(\.items)
-        let videos = candidates.prefix(TopShelfStore.itemCount).map {
-            TopShelfVideo(
-                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
-        }
-        TopShelfStore.save(Array(videos))
-        // tvOS caches what the provider last returned and would otherwise keep showing it until
-        // it next decides to ask. This is what makes the tiles follow a profile switch.
-        TVTopShelfContentProvider.topShelfContentDidChange()
-    }
-
-    /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages.
-    private func newSections(in candidates: [FeedSection]) -> [FeedSection] {
-        let shown = Set(sections.flatMap { $0.items.map(\.id) })
-        return candidates.filter { section in
-            !section.items.allSatisfy { shown.contains($0.id) }
-        }
     }
 
 }
@@ -783,6 +780,51 @@ extension HomeView {
         sections[leadSections.endIndex...]
     }
 
+    fileprivate func section(withID id: String) -> FeedSection? {
+        sections.first { $0.id == id } ?? supplementarySections.first { $0.id == id }
+    }
+
+    /// Drops shelves whose videos are all already on screen — YouTube repeats rows across pages —
+    /// and any left empty by `HomeDismissals`.
+    fileprivate func newSections(in candidates: [FeedSection]) -> [FeedSection] {
+        let shown = Set(sections.flatMap { $0.items.map(\.id) })
+        return candidates.filter { section in
+            !section.items.isEmpty && !section.items.allSatisfy { shown.contains($0.id) }
+        }
+    }
+
+    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
+    /// above the app's icon on the tvOS home screen.
+    ///
+    /// Written here, on every successful first page, because this is the only point where the
+    /// active profile's feed is known to be current — the extension has no token of its own and
+    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
+    /// first one's items means a lead shelf holding a single video still fills both tiles.
+    /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
+    /// which is neither the shape nor the metadata a Short has.
+    fileprivate func updateTopShelf(from sections: [FeedSection]) {
+        let candidates = sections.filter { !$0.isShorts }.flatMap(\.items)
+        let videos = candidates.prefix(TopShelfStore.itemCount).map {
+            TopShelfVideo(
+                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
+        }
+        TopShelfStore.save(Array(videos))
+        // tvOS caches what the provider last returned and would otherwise keep showing it until
+        // it next decides to ask. This is what makes the tiles follow a profile switch.
+        TVTopShelfContentProvider.topShelfContentDidChange()
+    }
+
+    /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
+    /// only a handful of videos, so without this a row ends after five cards.
+    /// Takes an id rather than the row itself: the caller's copy can be a page behind, and
+    /// acting on its token would spawn a Task for a row that is already exhausted.
+    fileprivate func prefetchItemsIfNeeded(in id: String) {
+        guard let section = section(withID: id), section.continuation != nil,
+            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
+        else { return }
+        Task { await loadMoreItems(in: id) }
+    }
+
     /// The whole screen when the first page didn't land. Lives out here rather than in the
     /// view above for room: `type_body_length` is a real ceiling and this is self-contained.
     private func errorView(_ message: String) -> some View {
@@ -808,9 +850,14 @@ extension HomeView {
         FeedRow(
             section: section,
             onSelectVideo: onSelectVideo,
-            onLongPressVideo: { menuItem = $0 },
+            onLongPressVideo: {
+                menuItem = $0
+                menuRowID = section.id
+            },
             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
-            firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil
+            firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil,
+            cardFocus: $focusedCardID,
+            scrollTarget: cardToReveal(in: section)
         )
         .onAppear { prefetchIfNeeded(from: section) }
     }
@@ -821,8 +868,128 @@ extension HomeView {
         FeedRow(
             section: section,
             onSelectVideo: onSelectVideo,
-            onLongPressVideo: { menuItem = $0 },
+            onLongPressVideo: {
+                menuItem = $0
+                menuRowID = section.id
+            },
             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
         )
+    }
+}
+
+extension HomeView {
+    /// Takes away what the user just said they weren't interested in: the one card, or every
+    /// card from its channel.
+    ///
+    /// Only Home's own rows. The supplementary feeds are Subscriptions and History — what the
+    /// user follows and what they watched — and neither is a recommendation to take back.
+    fileprivate func remove(_ video: VideoItem, _ kind: VideoDismissal) {
+        dismissals.add(video, kind)
+        let neighbour = neighbour(of: video, inRow: menuRowID, keeping: { !dismissals.covers($0) })
+        sections = undismissed(sections)
+        // The focused card is the one that went, and tvOS doesn't pick another: focus would be
+        // nowhere until the next press.
+        pendingCardFocus = neighbour
+    }
+
+    /// Puts focus on the card with this `FeedRow.focusKey`, asking until it has it.
+    ///
+    /// Asked over and over, like the hand-off after a refresh: the menu's dialog is still on its
+    /// way out when the card goes, and while it holds focus a request is accepted and dropped.
+    /// A second and a half of tries, which outlasts the dialog's exit.
+    ///
+    /// Done only once the card has held focus for two checks in a row: a request the dialog
+    /// drops can still read back as granted until the next update, and stopping on that would
+    /// let the news strip take focus again with nothing focused.
+    fileprivate func handFocus(to id: String?) async {
+        guard let id else { return }
+        focusedCardID = nil
+        var confirmations = 0
+        for _ in 0..<15 where confirmations < 2 {
+            if focusedCardID == id {
+                confirmations += 1
+            } else {
+                confirmations = 0
+                focusedCardID = id
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+        }
+        pendingCardFocus = nil
+    }
+
+    /// `sections` without anything dismissed, and without the rows that leaves empty — a row
+    /// emptied of its cards would stand as a heading over nothing.
+    fileprivate func undismissed(_ sections: [FeedSection]) -> [FeedSection] {
+        sections.map { $0.removing(where: dismissals.covers) }.filter { !$0.items.isEmpty }
+    }
+
+    /// The card in this row that focus is on its way to, by video id — for the row to scroll
+    /// it into view first. See `FeedRow.scrollTarget`.
+    fileprivate func cardToReveal(in section: FeedSection) -> String? {
+        let prefix = FeedRow.focusKey(row: section.id, video: "")
+        guard let key = pendingCardFocus, key.hasPrefix(prefix) else { return nil }
+        return String(key.dropFirst(prefix.count))
+    }
+
+    /// Scrolls the feed to the row focus is on its way to: Home's rows are lazy too, and one
+    /// that isn't on screen may not have been built.
+    fileprivate func revealingPendingCard(_ rows: some View) -> some View {
+        ScrollViewReader { proxy in
+            rows.onChange(of: pendingCardFocus) { _, key in
+                guard let row = sections.first(where: { cardToReveal(in: $0) != nil }) else { return }
+                if key != nil { withAnimation { proxy.scrollTo(row.id) } }
+            }
+        }
+    }
+
+    /// Where focus goes when `video` is taken away from `rowID`, as a `FeedRow.focusKey`: the
+    /// next card along that row that stays, else the one before it, else the first that stays
+    /// in the nearest row below, else in the nearest row above.
+    private func neighbour(of video: VideoItem, inRow rowID: String?, keeping stays: (VideoItem) -> Bool)
+        -> String?
+    {
+        guard
+            let row = sections.firstIndex(where: { $0.id == rowID })
+                ?? sections.firstIndex(where: { $0.items.contains { $0.id == video.id } })
+        else { return nil }
+        let items = sections[row].items
+        if let index = items.firstIndex(where: { $0.id == video.id }),
+            let next = items[(index + 1)...].first(where: stays) ?? items[..<index].last(where: stays)
+        {
+            return FeedRow.focusKey(row: sections[row].id, video: next.id)
+        }
+        let others = sections[(row + 1)...] + sections[..<row].reversed()
+        for section in others {
+            if let card = section.items.first(where: stays) {
+                return FeedRow.focusKey(row: section.id, video: card.id)
+            }
+        }
+        return nil
+    }
+}
+
+/// What the user has dismissed from Home since the feed was loaded: kept so a page that was
+/// already on its way — the next shelves, or more of a row — can't bring it straight back.
+/// Cleared with the feed, since a fresh one comes from YouTube with the feedback applied.
+struct HomeDismissals {
+    private var videoIDs: Set<String> = []
+    private var channels: [(id: String?, name: String)] = []
+
+    mutating func add(_ video: VideoItem, _ kind: VideoDismissal) {
+        videoIDs.insert(video.id)
+        if kind == .channel { channels.append((video.channelID, video.author)) }
+    }
+
+    /// Whether `item` is one of the dismissed videos, or from a dismissed channel.
+    ///
+    /// A channel is matched by id when both sides carry one, and by name only when one doesn't:
+    /// Home's tiles don't carry the channel, but two channels can share a name.
+    func covers(_ item: VideoItem) -> Bool {
+        if videoIDs.contains(item.id) { return true }
+        return channels.contains { channel in
+            if let id = channel.id, let itemID = item.channelID { return id == itemID }
+            return !channel.name.isEmpty && channel.name == item.author
+        }
     }
 }
