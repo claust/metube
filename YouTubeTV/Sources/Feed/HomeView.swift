@@ -631,9 +631,11 @@ struct HomeView: View {
             else { return }
 
             pagesLoaded += 1
-            // A page requested before a dismissal can carry what was dismissed.
-            let fresh = newSections(in: undismissed(page.sections))
-            sections.append(contentsOf: fresh)
+            // A page requested before a dismissal can carry what was dismissed. It's filtered
+            // out only after deciding whether to page on: a page that was all dismissed cards
+            // is still progress through the feed.
+            let fresh = newSections(in: page.sections)
+            sections.append(contentsOf: undismissed(fresh))
             // If a page adds nothing, stop — the trigger row would otherwise stay last and
             // refire on every scroll, paging forever with no visible progress.
             continuation = fresh.isEmpty ? nil : page.continuation
@@ -681,8 +683,10 @@ struct HomeView: View {
             // replaces every section, and re-keying this to a row that no longer exists would
             // leak an entry the reset above can no longer reach.
             // Same for a Home row's next page. The supplementary rows were never filtered.
-            let items = sections.contains { $0.id == id } ? page.items.filter { !dismissals.covers($0) } : page.items
-            if append(items, continuation: page.continuation, to: id) {
+            let isHomeRow = sections.contains { $0.id == id }
+            if append(
+                page.items, continuation: page.continuation, to: id, dropping: isHomeRow ? dismissals.covers : nil)
+            {
                 rowPagesLoaded[id, default: 1] += 1
             }
         } catch {
@@ -694,9 +698,12 @@ struct HomeView: View {
 
     /// Adds videos to the row with this id, in whichever list holds it. Returns `false` when
     /// no such row is on screen any more — a reload replaced it while the request was in flight.
+    /// Videos `dropping` picks out are left out, but still count as the page making progress.
     @MainActor
     @discardableResult
-    private func append(_ items: [VideoItem], continuation: String?, to id: String) -> Bool {
+    private func append(
+        _ items: [VideoItem], continuation: String?, to id: String, dropping: ((VideoItem) -> Bool)? = nil
+    ) -> Bool {
         func update(_ list: inout [FeedSection], newestFirst: Bool = false) -> Bool {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
             let section = list[index]
@@ -704,6 +711,8 @@ struct HomeView: View {
             // Shorts belong only in a Shorts row, on a page as much as on the first load — see
             // `FeedSection.admitting`.
             var fresh = section.admitting(items).filter { !existing.contains($0.id) }
+            let madeProgress = !fresh.isEmpty
+            if let dropping { fresh.removeAll(where: dropping) }
             // A chronological row's next page arrives in the order YouTube sent it, so it is put
             // in date order too — but only within itself, and it still lands at the end. Sorting
             // the row as a whole would move cards the user has already scrolled past, and take
@@ -717,7 +726,7 @@ struct HomeView: View {
                 items: section.items + fresh,
                 // A page that adds nothing new means the row is going in circles: stop, or the
                 // last card stays the trigger and refires on every scroll.
-                continuation: fresh.isEmpty ? nil : continuation,
+                continuation: madeProgress ? continuation : nil,
                 isShorts: section.isShorts
             )
             return true
@@ -730,27 +739,6 @@ struct HomeView: View {
             return true
         }
         return false
-    }
-
-    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
-    /// above the app's icon on the tvOS home screen.
-    ///
-    /// Written here, on every successful first page, because this is the only point where the
-    /// active profile's feed is known to be current — the extension has no token of its own and
-    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
-    /// first one's items means a lead shelf holding a single video still fills both tiles.
-    /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
-    /// which is neither the shape nor the metadata a Short has.
-    private func updateTopShelf(from sections: [FeedSection]) {
-        let candidates = sections.filter { !$0.isShorts }.flatMap(\.items)
-        let videos = candidates.prefix(TopShelfStore.itemCount).map {
-            TopShelfVideo(
-                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
-        }
-        TopShelfStore.save(Array(videos))
-        // tvOS caches what the provider last returned and would otherwise keep showing it until
-        // it next decides to ask. This is what makes the tiles follow a profile switch.
-        TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
 }
@@ -800,6 +788,27 @@ extension HomeView {
         return candidates.filter { section in
             !section.items.isEmpty && !section.items.allSatisfy { shown.contains($0.id) }
         }
+    }
+
+    /// Hands the feed's first couple of videos to the Top Shelf extension, which draws them
+    /// above the app's icon on the tvOS home screen.
+    ///
+    /// Written here, on every successful first page, because this is the only point where the
+    /// active profile's feed is known to be current — the extension has no token of its own and
+    /// only ever reads what this leaves behind. Flattening the shelves rather than taking the
+    /// first one's items means a lead shelf holding a single video still fills both tiles.
+    /// Shorts are skipped: the Top Shelf draws its tiles wide, with the title beside the artwork,
+    /// which is neither the shape nor the metadata a Short has.
+    fileprivate func updateTopShelf(from sections: [FeedSection]) {
+        let candidates = sections.filter { !$0.isShorts }.flatMap(\.items)
+        let videos = candidates.prefix(TopShelfStore.itemCount).map {
+            TopShelfVideo(
+                id: $0.id, title: $0.title, author: $0.author, thumbnailURL: $0.thumbnailURL)
+        }
+        TopShelfStore.save(Array(videos))
+        // tvOS caches what the provider last returned and would otherwise keep showing it until
+        // it next decides to ask. This is what makes the tiles follow a profile switch.
+        TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
     /// The whole screen when the first page didn't land. Lives out here rather than in the
