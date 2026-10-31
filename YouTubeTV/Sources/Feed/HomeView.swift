@@ -586,8 +586,9 @@ struct HomeView: View {
         pagesLoaded = 1
         lastLoaded = .now
         // The feed the tiles were cut from has just been replaced, so cut them again — the
-        // whole point of this button is that Home now leads with different videos.
-        updateTopShelf(from: page.sections)
+        // whole point of this button is that Home now leads with different videos. From the
+        // filtered rows, so a dismissed video doesn't come back on the Top Shelf.
+        updateTopShelf(from: sections)
         // Same reason as the first load: every row id is new, so state keyed to the old ones
         // would point at rows that no longer exist.
         rowsLoadingMore = []
