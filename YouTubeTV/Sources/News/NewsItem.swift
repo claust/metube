@@ -2,11 +2,12 @@ import Foundation
 
 /// A news outlet the banner pulls headlines from.
 ///
-/// One case for now. The banner shows whatever `NewsService` returns for the sources it is
-/// given, so adding an outlet is a case plus its feed URL — nothing else in the app knows the
-/// list. Feeds are plain RSS 2.0, which is the only shape `RSSFeedParser` reads.
+/// The banner shows whatever `NewsService` returns for the sources it is given, so adding an
+/// outlet is a case plus its feed URL — and, for the reading panel, a way to find the article
+/// text on its pages (see `ArticleService`).
 enum NewsSource: String, CaseIterable, Identifiable, Hashable {
     case bbc
+    case dr
 
     var id: String { rawValue }
 
@@ -15,16 +16,39 @@ enum NewsSource: String, CaseIterable, Identifiable, Hashable {
     var displayName: String {
         switch self {
         case .bbc: return "BBC NEWS"
+        case .dr: return "DR NYHEDER"
         }
     }
 
-    /// The outlet's front-page RSS feed. BBC publishes these openly for reuse under the terms
-    /// linked from the feed's own `<copyright>`; they carry headline, one-line summary, a
-    /// thumbnail and the article link — everything the banner needs and nothing more.
+    /// Where the outlet's headlines are read from.
+    ///
+    /// BBC's front-page RSS feed, published openly for reuse under the terms linked from its own
+    /// `<copyright>`: headline, one-line summary, a thumbnail and the article link.
+    ///
+    /// DR's "Seneste nyt" page rather than any of its RSS feeds. The feed that sounds like it —
+    /// `allenyheder` — is only DR's "Kort nyt" briefs plus sport, mostly without pictures, so
+    /// the banner showed a different set of stories from the page people know. The page is the
+    /// real timeline across every section, and embeds it as data with a picture per story.
     var feedURL: URL {
         switch self {
         case .bbc: return URL(string: "https://feeds.bbci.co.uk/news/rss.xml")!
+        case .dr: return URL(string: "https://www.dr.dk/nyheder/seneste")!
         }
+    }
+
+    /// The first path segment of the outlet's sport pages. Neither feed carries a `<category>`,
+    /// but both file every story under its section, so the link says what the story is about.
+    private var sportSection: String {
+        switch self {
+        case .bbc: return "sport"
+        case .dr: return "sporten"
+        }
+    }
+
+    /// Whether a story's link is to the outlet's sport section — kept off the banner, which is
+    /// for the news.
+    func isSport(_ link: URL?) -> Bool {
+        link?.pathComponents.dropFirst().first == sportSection
     }
 }
 

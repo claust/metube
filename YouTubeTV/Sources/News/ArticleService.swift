@@ -4,8 +4,8 @@ import Foundation
 ///
 /// The RSS feed carries a headline and one sentence of standfirst — the story itself is only on
 /// the article page, so reading it means fetching that page and pulling the text back out of it.
-/// There is no API for this; the shape below is what BBC's pages happen to be built from, and it
-/// can change under us without warning. Every failure mode therefore ends the same way: an empty
+/// There is no API for this; each outlet's reader below follows what its pages happen to be
+/// built from, and either can change under us without warning. Every failure mode therefore ends the same way: an empty
 /// result, and the caller falls back to the summary the feed gave it.
 /// One piece of an article's body.
 struct ArticleBlock: Hashable {
@@ -20,42 +20,69 @@ struct ArticleBlock: Hashable {
     let text: String
 }
 
+/// What the reading panel takes from an article's page: the text, and the picture the outlet
+/// chose for the story.
+struct Article: Hashable {
+    let blocks: [ArticleBlock]
+    /// The page's `og:image` — what the outlet shows when the story is shared. Read because a
+    /// feed item can arrive without a picture (DR's short news items never carry one), and the
+    /// page is being fetched for its text anyway.
+    let imageURL: URL?
+
+    static let empty = Article(blocks: [], imageURL: nil)
+}
+
 struct ArticleService {
     /// Bodies already fetched this session, so stepping back to a story is instant and a lap of
     /// the ticker doesn't refetch the same articles. Session-lived on purpose — news pages get
     /// corrected, and nothing here is worth persisting across launches.
     private static let cache = ArticleCache()
 
-    /// The article's body in order, or an empty array when the page yielded no body — an index
-    /// or live page rather than an article, a layout change, or a failed request.
-    func body(for item: NewsItem) async -> [ArticleBlock] {
-        if let cached = await Self.cache.blocks(forID: item.id) { return cached }
-        guard let link = item.link else { return [] }
+    /// The article's body in order and its picture. The body is empty when the page yielded
+    /// none — an index or live page rather than an article, a layout change, or a failed request.
+    func article(for item: NewsItem) async -> Article {
+        if let cached = await Self.cache.article(forID: item.id) { return cached }
+        guard let link = item.link else { return .empty }
 
         var request = URLRequest(url: link)
         // BBC serves a stripped page to clients it doesn't recognise, and the embedded article
         // data this reads is missing from it.
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
 
-        let blocks: [ArticleBlock]
+        let article: Article
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                 let html = String(data: data, encoding: .utf8)
-            else { return [] }
-            blocks = Self.body(inPageHTML: html, headline: item.title)
+            else { return .empty }
+            let blocks: [ArticleBlock]
+            switch item.source {
+            case .bbc: blocks = Self.body(inPageHTML: html, headline: item.title)
+            case .dr: blocks = Self.body(inDRPageHTML: html, focusID: Self.drFocusID(in: link))
+            }
+            article = Article(blocks: blocks, imageURL: Self.shareImageURL(inPageHTML: html))
         } catch {
-            return []
+            return .empty
         }
 
         // Cached even when empty: a page with no article body will have none next time either,
         // and re-fetching a few hundred KB on every left/right press to learn that again is the
         // one thing this cache exists to prevent.
-        await Self.cache.store(blocks, forID: item.id)
-        return blocks
+        await Self.cache.store(article, forID: item.id)
+        return article
     }
 
-    private static let userAgent =
+    /// The page's `og:image`, from either attribute order — DR writes `property` first, and
+    /// nothing promises every page will.
+    static func shareImageURL(inPageHTML html: String) -> URL? {
+        guard let tag = html.firstMatch(of: #/<meta[^>]*property="og:image"[^>]*>/#)?.output,
+            let content = tag.firstMatch(of: #/content="([^"]+)"/#)?.output.1
+        else { return nil }
+        return URL(string: decodingEntities(String(content)))
+    }
+
+    /// A desktop Safari's. Also what `NewsService` sends for DR's "Seneste nyt" page.
+    static let userAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
         + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
@@ -101,6 +128,104 @@ struct ArticleService {
         // the body from coming back three times over.
         guard let key = data.keys.first(where: { $0.hasPrefix("article") }) else { return [] }
         return withoutRepeatedHeadline(blocks(in: data[key] as Any), headline: headline)
+    }
+
+    /// The attribute DR's pages put on the element wrapping the article text.
+    private static let drBodyMarker = "itemProp=\"articleBody\""
+
+    /// The liveblog post a DR link points into, if it does. Sport headlines in DR's feed are
+    /// often a single post in a running blog, linked as the blog's page plus `?focusId=<post>`.
+    static func drFocusID(in link: URL) -> String? {
+        URLComponents(url: link, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "focusId" }?.value
+    }
+
+    /// Pulls the article's paragraphs out of a DR page.
+    ///
+    /// DR renders the article server-side, so unlike BBC there is no page model to decode — the
+    /// text is read from the markup, starting at the `articleBody` element. A short news item's
+    /// page lists the neighbouring items below it, each with an `articleBody` of its own, so the
+    /// read stops where the next one begins.
+    ///
+    /// A liveblog's `articleBody` is the blog's standing introduction, the same few words over
+    /// every post, so a link into a blog reads the post and nothing else. The page only carries
+    /// the newest posts; one that has scrolled out of it comes back empty, and the panel shows
+    /// the headline alone rather than an introduction that says nothing about the story.
+    static func body(inDRPageHTML html: String, focusID: String? = nil) -> [ArticleBlock] {
+        if let focusID { return liveblogPost(focusID, inDRPageHTML: html) }
+        guard let start = html.range(of: drBodyMarker) else { return [] }
+        let rest = html[start.upperBound...]
+        let end = rest.range(of: drBodyMarker)?.lowerBound ?? rest.endIndex
+
+        // Body paragraphs and subheadings — `hydra-article-body-paragraph` on an article,
+        // `hydra-latest-news-page-short-news-article__paragraph` on a short news item,
+        // `hydra-article-body-sub-heading` for a heading. Matched on the `hydra-` class rather
+        // than on bare `<p>`, because a fact box, a picture credit and the "more news" cards
+        // are `<p>`s too.
+        let block = #/<(p|h2) class="hydra-[^"]*(paragraph|sub-heading)[^"]*"[^>]*>(.*?)</\1>/#
+            .dotMatchesNewlines()
+        return rest[..<end].matches(of: block).compactMap { match in
+            let text = plainText(fromHTML: String(match.output.3))
+            guard !text.isEmpty else { return nil }
+            let kind: ArticleBlock.Kind = match.output.2 == "sub-heading" ? .subheading : .paragraph
+            return ArticleBlock(kind: kind, text: text)
+        }
+    }
+
+    /// The liveblog post with this id, read from the page data Next.js streams into the page.
+    ///
+    /// The rendered page only carries the latest handful of posts, but the data behind it has
+    /// each as `{"id":"<post>",…,"content":"<p>…</p>"}` in the page data — JSON written as
+    /// JavaScript strings, so, as with BBC, decoded twice: once for the page data (see
+    /// `DRLatestNewsParser.pageData`), once for the post's `content`.
+    private static func liveblogPost(_ id: String, inDRPageHTML html: String) -> [ArticleBlock] {
+        let data = DRLatestNewsParser.pageData(in: html)
+        guard let post = data.range(of: #""id":"\#(id)""#),
+            let content = jsonStringLiteral(after: #""content":"#, in: String(data[post.upperBound...])),
+            let markup = try? JSONSerialization.jsonObject(
+                with: Data(content.utf8), options: [.fragmentsAllowed]) as? String
+        else { return [] }
+
+        return markup.matches(of: #/<p[^>]*>(.*?)</p>/#.dotMatchesNewlines()).compactMap { match in
+            let text = plainText(fromHTML: String(match.output.1))
+            return text.isEmpty ? nil : ArticleBlock(kind: .paragraph, text: text)
+        }
+    }
+
+    /// A fragment of markup as the text it shows: tags dropped — links inside a paragraph keep
+    /// their words — and entities decoded.
+    private static func plainText(fromHTML fragment: String) -> String {
+        // A `<br>` is the one tag that stands for text: dropped like the rest, the lines either
+        // side of it would run together into one word.
+        let stripped =
+            fragment
+            .replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        return decodingEntities(stripped).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The named entities DR's markup uses, plus numeric ones. Not `NSAttributedString`'s HTML
+    /// import, which would decode everything but spins up WebKit on the main thread to do it.
+    private static func decodingEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        let named = [
+            "&quot;": "\"", "&#x27;": "'", "&apos;": "'", "&lt;": "<", "&gt;": ">",
+            "&nbsp;": " ",
+        ]
+        var result = text
+        for (entity, character) in named {
+            result = result.replacingOccurrences(of: entity, with: character)
+        }
+        // Numeric references, decimal or hex.
+        result.replace(#/&#(x?)([0-9a-fA-F]+);/#) { match in
+            let radix = match.output.1.isEmpty ? 10 : 16
+            guard let value = UInt32(match.output.2, radix: radix),
+                let scalar = Unicode.Scalar(value)
+            else { return String(match.output.0) }
+            return String(Character(scalar))
+        }
+        // Last, so an escaped entity ("&amp;quot;") comes out as the text it spells.
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 
     /// Drops an opening paragraph that is just the headline again.
@@ -197,18 +322,18 @@ private actor ArticleCache {
     /// evening's use.
     private static let capacity = 40
 
-    private var stored: [String: [ArticleBlock]] = [:]
+    private var stored: [String: Article] = [:]
 
     /// Keys in insertion order, oldest first. Age rather than least-recently-read: headlines
     /// only move forward, so the oldest body is also the one least likely to be asked for again,
     /// and tracking reads would mean rewriting this array on every cache hit.
     private var order: [String] = []
 
-    func blocks(forID id: String) -> [ArticleBlock]? { stored[id] }
+    func article(forID id: String) -> Article? { stored[id] }
 
-    func store(_ blocks: [ArticleBlock], forID id: String) {
+    func store(_ article: Article, forID id: String) {
         if stored[id] == nil { order.append(id) }
-        stored[id] = blocks
+        stored[id] = article
         while order.count > Self.capacity {
             stored.removeValue(forKey: order.removeFirst())
         }

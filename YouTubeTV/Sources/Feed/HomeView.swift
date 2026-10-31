@@ -400,6 +400,10 @@ struct HomeView: View {
         // the stale headlines for the full fifteen. The headlines already on screen stay there
         // in the meantime.
         guard !items.isEmpty else { return }
+        // The pictures are only shown once a story is opened, and DR's take seconds to come
+        // back the first time anyone asks for them. Asked for now, they are in memory by the
+        // time the ticker is stopped on one.
+        ImageCache.shared.prefetch(items.compactMap(\.largeImageURL))
         // A fetch that returned something counts as loaded whether or not it was applied on the
         // spot: refetching every poll while someone reads a long article would cost the same
         // request for the same answer.
