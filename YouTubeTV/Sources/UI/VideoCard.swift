@@ -42,6 +42,9 @@ struct VideoCard: View {
     /// A screen-wide focus handle keyed by video id, for a screen that has to move focus to a
     /// card it chooses — Home, onto a dismissed card's neighbour (see `HomeView.remove`).
     var focusID: FocusState<String?>.Binding?
+    /// The value `focusID` takes when this card has focus. Defaults to the video id; a screen
+    /// that can show the same video in two rows gives each card one naming its row too.
+    var focusKey: String?
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
@@ -144,7 +147,7 @@ struct VideoCard: View {
         .accessibilityLabel(accessibilityText)
         .focusEffectDisabled()
         .modifier(ExternalFocus(binding: externalFocus))
-        .modifier(IDFocus(binding: focusID, id: item.id))
+        .modifier(IDFocus(binding: focusID, id: focusKey ?? item.id))
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.08 : 1.0)
         .shadow(color: .black.opacity(isFocused ? 0.6 : 0), radius: 20)

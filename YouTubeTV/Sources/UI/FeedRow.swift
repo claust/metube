@@ -16,8 +16,12 @@ struct FeedRow: View {
     /// Passed on to this row's first card — see `VideoCard.externalFocus`. Only the row a
     /// screen wants to be able to focus is given one.
     var firstCardFocus: FocusState<Bool>.Binding?
-    /// Passed on to every card — see `VideoCard.focusID`.
+    /// Passed on to every card, keyed by `focusKey(row:video:)` — see `VideoCard.focusID`.
     var cardFocus: FocusState<String?>.Binding?
+
+    /// What a card answers to on `cardFocus`. Names the row as well as the video: Home lets the
+    /// same video into two shelves, and a key shared by two cards can't say which to focus.
+    static func focusKey(row: String, video: String) -> String { "\(row)/\(video)" }
 
     /// Start fetching more videos for a row once a card this close to its end comes into view.
     static let itemPrefetchDistance = 4
@@ -42,7 +46,8 @@ struct FeedRow: View {
                             action: { onSelectVideo(item) },
                             externalFocus: item.id == section.items.first?.id
                                 ? firstCardFocus : nil,
-                            focusID: cardFocus
+                            focusID: cardFocus,
+                            focusKey: Self.focusKey(row: section.id, video: item.id)
                         )
                         // In a LazyHStack this runs as the card scrolls in, which is the
                         // point: paging starts while cards are still to the right of it.
