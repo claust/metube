@@ -15,8 +15,8 @@ struct CommentsOverlayView: View {
     let videoId: String
     var onClose: () -> Void
 
-    /// The video's description, once loaded. Stays `nil` if it can't be: the card is extra, so
-    /// a failed fetch just leaves the comments on their own.
+    /// The video's description, once the watch page is in — see `loadedTopLevel()`. Stays `nil`
+    /// if that fetch fails, which leaves the failure notice on its own.
     @State private var description: VideoDescription?
     @State private var isDescriptionExpanded = false
 
@@ -57,9 +57,6 @@ struct CommentsOverlayView: View {
                 .background(.ultraThinMaterial)
         }
         .ignoresSafeArea()
-        .task {
-            description = try? await DescriptionService().description(videoId: videoId)
-        }
         .onExitCommand {
             if let parent {
                 // Noted before the level changes, so the top-level list knows which row to
@@ -84,7 +81,7 @@ struct CommentsOverlayView: View {
                 if !Task.isCancelled { replies = result }
             } else if topLevel.comments.isEmpty {
                 topLevel.isLoading = true
-                let result = await loaded(CommentList(), fromVideo: videoId)
+                let result = await loadedTopLevel()
                 if !Task.isCancelled { topLevel = result }
             }
         }
@@ -273,11 +270,19 @@ struct CommentsOverlayView: View {
         return list
     }
 
-    private func loaded(_ list: CommentList, fromVideo videoId: String) async -> CommentList {
-        var list = list
+    /// The first page of top-level comments, and the description from the same watch page. The
+    /// description is published before the comments are looked for, so a video with comments
+    /// turned off still gets its card.
+    private func loadedTopLevel() async -> CommentList {
+        var list = CommentList()
         list.isLoading = true
         do {
-            let page = try await CommentService().topLevelComments(videoId: videoId)
+            let service = CommentService()
+            let watchPage = try await service.watchPage(videoId: videoId)
+            if description == nil {
+                description = DescriptionService().description(inWatchPage: watchPage)
+            }
+            let page = try await service.topLevelComments(inWatchPage: watchPage)
             list.comments += page.comments
             list.continuation = page.continuation
             list.loadFailed = false

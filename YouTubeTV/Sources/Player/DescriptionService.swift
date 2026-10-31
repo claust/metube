@@ -39,15 +39,12 @@ struct DescriptionLink: Identifiable, Hashable {
     var id: Int { range.location }
 }
 
-/// Fetches a video's description from the WEB client's `/next`, the same call that locates the
-/// comment section. The description lives in `videoSecondaryInfoRenderer.attributedDescription`:
-/// `content` is the text, and `commandRuns` mark the links by UTF-16 offset.
+/// Reads a video's description out of the watch page — `CommentService.watchPage(videoId:)`,
+/// the same response that locates the comment section. The description lives in
+/// `videoSecondaryInfoRenderer.attributedDescription`: `content` is the text, and `commandRuns`
+/// mark the links by UTF-16 offset.
 struct DescriptionService {
-    func description(videoId: String) async throws -> VideoDescription {
-        let json = try await InnerTubeClient.post(
-            endpoint: "next",
-            client: .web,
-            params: ["videoId": videoId])
+    func description(inWatchPage json: [String: Any]) -> VideoDescription {
         let primary = findAllRenderers(named: "videoPrimaryInfoRenderer", in: json).first ?? [:]
         let secondary = findAllRenderers(named: "videoSecondaryInfoRenderer", in: json).first ?? [:]
         let owner = findAllRenderers(named: "videoOwnerRenderer", in: secondary).first ?? [:]

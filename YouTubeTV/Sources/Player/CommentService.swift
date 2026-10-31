@@ -53,12 +53,17 @@ struct CommentPage {
 /// commentId, while ordering and reply tokens come from the renderer list — so a page is parsed
 /// by joining the two on commentId.
 struct CommentService {
-    /// The first page of top-level comments, sorted by YouTube's default "Top comments" order.
-    func topLevelComments(videoId: String) async throws -> CommentPage {
-        let json = try await InnerTubeClient.post(
+    /// The watch page, `/next {"videoId"}`. It says where the comments are and also carries
+    /// the description (see `DescriptionService`), so the panel fetches it once for both.
+    func watchPage(videoId: String) async throws -> [String: Any] {
+        try await InnerTubeClient.post(
             endpoint: "next",
             client: .web,
             params: ["videoId": videoId])
+    }
+
+    /// The first page of top-level comments, sorted by YouTube's default "Top comments" order.
+    func topLevelComments(inWatchPage json: [String: Any]) async throws -> CommentPage {
         // The watch page carries the comment section twice (inline and as an engagement
         // panel), both marked with the same sectionIdentifier; their tokens differ but both
         // resolve to the same comment list, so any match works.

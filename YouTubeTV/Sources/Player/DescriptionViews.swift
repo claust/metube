@@ -6,15 +6,21 @@ private let linkColor = Color(red: 0.24, green: 0.65, blue: 1.0)
 
 // MARK: - Text
 
-/// One blank-line-separated block of a description, with its links tinted.
+/// One focusable block of a description, with its links tinted.
 struct DescriptionParagraph: Identifiable {
     let id: Int
     let text: AttributedString
 }
 
 extension VideoDescription {
-    /// The description cut at blank lines. Each block is its own focusable row, because focus is
-    /// what scrolls on tvOS: one tall Text taller than the screen could never show its end.
+    /// The most a row may hold, in UTF-16 units. Each block is its own focusable row because
+    /// focus is what scrolls on tvOS, so a row taller than the panel would never show its end:
+    /// at the card's 24pt in the 560pt-wide column this is about a dozen lines, well under the
+    /// panel's height.
+    static let maxBlockLength = 500
+
+    /// The description cut at blank lines, with any block still too long for one row cut again
+    /// — see `chunks(of:)`.
     var paragraphs: [DescriptionParagraph] {
         let whole = text as NSString
         let breaks =
@@ -27,9 +33,53 @@ extension VideoDescription {
             start = match.range.location + match.range.length
         }
         ranges.append(NSRange(location: start, length: whole.length - start))
-        return ranges.filter { $0.length > 0 }.map {
+        return ranges.flatMap(chunks).filter { $0.length > 0 }.map {
             DescriptionParagraph(id: $0.location, text: attributed($0))
         }
+    }
+
+    /// `range` in pieces of at most `maxBlockLength`, cut at the last line break that fits, else
+    /// the last sentence end, else the last space — a chapter list stays whole lines and prose
+    /// whole sentences. A cut never lands inside a link, so every link stays tintable.
+    private func chunks(of range: NSRange) -> [NSRange] {
+        let whole = text as NSString
+        var pieces: [NSRange] = []
+        var start = range.location
+        let end = range.location + range.length
+        while end - start > Self.maxBlockLength {
+            let window = NSRange(location: start, length: Self.maxBlockLength)
+            var cut = start + Self.maxBlockLength
+            for separator in ["\n", ". ", " "] {
+                let found = whole.range(of: separator, options: .backwards, range: window)
+                if found.location != NSNotFound, found.location > start {
+                    cut = found.location + found.length
+                    break
+                }
+            }
+            if let link = links.first(where: { $0.range.location < cut && cut < NSMaxRange($0.range) }),
+                link.range.location > start
+            {
+                cut = link.range.location
+            }
+            // Never between the halves of a surrogate pair or inside a composed emoji.
+            cut = whole.rangeOfComposedCharacterSequence(at: cut).location
+            if cut <= start {
+                cut = NSMaxRange(whole.rangeOfComposedCharacterSequence(at: start + Self.maxBlockLength - 1))
+            }
+            // The whitespace either side of the cut belongs to neither row.
+            var pieceEnd = cut
+            while pieceEnd > start, isSpace(at: pieceEnd - 1) { pieceEnd -= 1 }
+            pieces.append(NSRange(location: start, length: pieceEnd - start))
+            start = cut
+            while start < end, isSpace(at: start) { start += 1 }
+        }
+        pieces.append(NSRange(location: start, length: end - start))
+        return pieces
+    }
+
+    private func isSpace(at index: Int) -> Bool {
+        guard let scalar = Unicode.Scalar((text as NSString).character(at: index)) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
     private func attributed(_ range: NSRange) -> AttributedString {
