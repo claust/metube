@@ -175,18 +175,13 @@ struct ArticleService {
     /// The liveblog post with this id, read from the page data Next.js streams into the page.
     ///
     /// The rendered page only carries the latest handful of posts, but the data behind it has
-    /// each as `{"id":"<post>",…,"content":"<p>…</p>"}`, inside a `self.__next_f.push([1,"…"])`
-    /// call — JSON written as a JavaScript string, so, as with BBC, decoded twice.
+    /// each as `{"id":"<post>",…,"content":"<p>…</p>"}` in the page data — JSON written as
+    /// JavaScript strings, so, as with BBC, decoded twice: once for the page data (see
+    /// `DRLatestNewsParser.pageData`), once for the post's `content`.
     private static func liveblogPost(_ id: String, inDRPageHTML html: String) -> [ArticleBlock] {
-        guard let idRange = html.range(of: #"\"id\":\"\#(id)\""#),
-            let push = html[..<idRange.lowerBound].range(
-                of: "self.__next_f.push([1,", options: .backwards),
-            let literal = jsonStringLiteral(
-                after: "push([1,", in: String(html[push.lowerBound...])),
-            let chunk = try? JSONSerialization.jsonObject(
-                with: Data(literal.utf8), options: [.fragmentsAllowed]) as? String,
-            let post = chunk.range(of: #""id":"\#(id)""#),
-            let content = jsonStringLiteral(after: #""content":"#, in: String(chunk[post.upperBound...])),
+        let data = DRLatestNewsParser.pageData(in: html)
+        guard let post = data.range(of: #""id":"\#(id)""#),
+            let content = jsonStringLiteral(after: #""content":"#, in: String(data[post.upperBound...])),
             let markup = try? JSONSerialization.jsonObject(
                 with: Data(content.utf8), options: [.fragmentsAllowed]) as? String
         else { return [] }

@@ -264,14 +264,7 @@ enum DRLatestNewsParser {
 
     /// The page's `publications` array, or `nil` if the page no longer has that shape.
     private static func publications(in html: String) -> [[String: Any]]? {
-        // Every push's string, decoded and joined: the tree can be split across several, and a
-        // split may fall anywhere — mid-array included.
-        let tree = html.matches(of: #/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/#)
-            .compactMap { match in
-                try? JSONSerialization.jsonObject(
-                    with: Data(match.output.1.utf8), options: [.fragmentsAllowed]) as? String
-            }
-            .joined()
+        let tree = pageData(in: html)
         guard let page = tree.range(of: #""name":"LatestNewsPage""#),
             let key = tree[page.upperBound...].range(of: #""publications":["#),
             // From the `[` the key search ended on, so the array opens at the start.
@@ -279,6 +272,20 @@ enum DRLatestNewsParser {
             let decoded = try? JSONSerialization.jsonObject(with: Data(array.utf8))
         else { return nil }
         return decoded as? [[String: Any]]
+    }
+
+    /// The data a DR page streams in for Next.js: every `self.__next_f.push([1,"…"])` string,
+    /// decoded and joined. Also what `ArticleService` reads a live blog's posts from.
+    ///
+    /// All of them rather than the one holding whatever is being looked for: the data can be
+    /// split across several pushes, and a split may fall anywhere — mid-array, mid-string.
+    static func pageData(in html: String) -> String {
+        html.matches(of: #/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/#)
+            .compactMap { match in
+                try? JSONSerialization.jsonObject(
+                    with: Data(match.output.1.utf8), options: [.fragmentsAllowed]) as? String
+            }
+            .joined()
     }
 
     /// The JSON array that opens at the start of `text` — which must begin with its `[` — cut at
