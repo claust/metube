@@ -635,10 +635,14 @@ struct HomeView: View {
             // out only after deciding whether to page on: a page that was all dismissed cards
             // is still progress through the feed.
             let fresh = newSections(in: page.sections)
-            sections.append(contentsOf: undismissed(fresh))
+            let visible = undismissed(fresh)
+            sections.append(contentsOf: visible)
             // If a page adds nothing, stop — the trigger row would otherwise stay last and
             // refire on every scroll, paging forever with no visible progress.
             continuation = fresh.isEmpty ? nil : page.continuation
+            // A page that was all dismissed cards added no row to fire the next one, so ask now.
+            // After this returns, so `isLoadingMore` is down; `maxPages` still bounds it.
+            if visible.isEmpty, continuation != nil { Task { await loadMore() } }
         } catch {
             if isCancellation(error) { return }
             // A failed page shouldn't wipe out the feed already on screen. Give up on paging
@@ -648,17 +652,6 @@ struct HomeView: View {
     }
 
     // MARK: - Paging one row (scrolling right)
-
-    /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
-    /// only a handful of videos, so without this a row ends after five cards.
-    /// Takes an id rather than the row itself: the caller's copy can be a page behind, and
-    /// acting on its token would spawn a Task for a row that is already exhausted.
-    private func prefetchItemsIfNeeded(in id: String) {
-        guard let section = section(withID: id), section.continuation != nil,
-            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
-        else { return }
-        Task { await loadMoreItems(in: id) }
-    }
 
     /// Appends the next batch of videos to one row.
     @MainActor
@@ -684,10 +677,14 @@ struct HomeView: View {
             // leak an entry the reset above can no longer reach.
             // Same for a Home row's next page. The supplementary rows were never filtered.
             let isHomeRow = sections.contains { $0.id == id }
+            let shown = section.items.count
             if append(
                 page.items, continuation: page.continuation, to: id, dropping: isHomeRow ? dismissals.covers : nil)
             {
                 rowPagesLoaded[id, default: 1] += 1
+                // Same as `loadMore`: a page of only dismissed cards adds no tail card to ask
+                // for the next. Spawned so it runs once this request has let go of the row.
+                if self.section(withID: id)?.items.count == shown { Task { prefetchItemsIfNeeded(in: id) } }
             }
         } catch {
             if isCancellation(error) { return }
@@ -809,6 +806,17 @@ extension HomeView {
         // tvOS caches what the provider last returned and would otherwise keep showing it until
         // it next decides to ask. This is what makes the tiles follow a profile switch.
         TVTopShelfContentProvider.topShelfContentDidChange()
+    }
+
+    /// Runs as a card near the end of a row scrolls into view. YouTube seeds each shelf with
+    /// only a handful of videos, so without this a row ends after five cards.
+    /// Takes an id rather than the row itself: the caller's copy can be a page behind, and
+    /// acting on its token would spawn a Task for a row that is already exhausted.
+    fileprivate func prefetchItemsIfNeeded(in id: String) {
+        guard let section = section(withID: id), section.continuation != nil,
+            !rowsLoadingMore.contains(id), (rowPagesLoaded[id] ?? 1) < Self.maxRowPages
+        else { return }
+        Task { await loadMoreItems(in: id) }
     }
 
     /// The whole screen when the first page didn't land. Lives out here rather than in the
