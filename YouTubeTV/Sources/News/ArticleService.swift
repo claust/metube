@@ -195,8 +195,12 @@ struct ArticleService {
     /// A fragment of markup as the text it shows: tags dropped — links inside a paragraph keep
     /// their words — and entities decoded.
     private static func plainText(fromHTML fragment: String) -> String {
-        let stripped = fragment.replacingOccurrences(
-            of: "<[^>]+>", with: "", options: .regularExpression)
+        // A `<br>` is the one tag that stands for text: dropped like the rest, the lines either
+        // side of it would run together into one word.
+        let stripped =
+            fragment
+            .replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         return decodingEntities(stripped).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
