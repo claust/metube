@@ -128,7 +128,8 @@ private func parseTile(_ tile: [String: Any]) -> VideoItem? {
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
         duration: durationOverlay(in: tile),
-        isShort: isShort(cell: tile, thumbnails: thumbnails)
+        isShort: isShort(cell: tile, thumbnails: thumbnails),
+        feedback: VideoFeedback(in: tile)
     )
 }
 
@@ -188,7 +189,8 @@ private func parseLockup(_ lockup: [String: Any]) -> VideoItem? {
         publishedAt: parts.publishedAt,
         viewCount: parts.viewCount,
         duration: lockupDuration(lockup),
-        isShort: isShort(cell: lockup, thumbnails: thumbnails)
+        isShort: isShort(cell: lockup, thumbnails: thumbnails),
+        feedback: VideoFeedback(in: lockup)
     )
 }
 
@@ -252,7 +254,8 @@ private func parseVideoRenderer(_ renderer: [String: Any]) -> VideoItem? {
         viewCount: views,
         // `lengthText` is this shape's own field; the overlay is the shared fallback.
         duration: innerTubeText(renderer["lengthText"]) ?? durationOverlay(in: renderer),
-        isShort: isShort(cell: renderer, thumbnails: thumbnails)
+        isShort: isShort(cell: renderer, thumbnails: thumbnails),
+        feedback: VideoFeedback(in: renderer)
     )
 }
 

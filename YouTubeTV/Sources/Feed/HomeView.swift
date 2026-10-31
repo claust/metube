@@ -49,6 +49,12 @@ struct HomeView: View {
     /// heading.
     @FocusState private var isFirstCardFocused: Bool
 
+    /// Which of Home's own cards has focus, by video id. Only ever set to hand focus to the
+    /// card beside one that was just taken away — see `remove`.
+    @FocusState private var focusedCardID: String?
+    /// That card, while focus is still on its way to it.
+    @State private var pendingCardFocus: String?
+
     @State private var sections: [FeedSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -174,7 +180,8 @@ struct HomeView: View {
 
             content
         }
-        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel)
+        .videoMenu(for: $menuItem, onOpenChannel: onOpenChannel, onDismiss: remove)
+        .task(id: pendingCardFocus) { await handFocus(to: pendingCardFocus) }
         .task {
             // Load once on first appear.
             if sections.isEmpty && !isLoading {
@@ -295,7 +302,9 @@ struct HomeView: View {
                             onNewsActiveChange($0)
                         },
                         onDismiss: { isHandingBackFocus = true },
-                        canTakeFocus: !isApplyingRefresh
+                        // Also kept out while a dismissed card's neighbour is being focused:
+                        // focus is on nothing then, and tvOS hands it to the topmost view.
+                        canTakeFocus: !isApplyingRefresh && pendingCardFocus == nil
                     )
                     .padding(.horizontal, Metrics.horizontalInset)
                     // Clears the clock, which floats over this screen's top-right corner
@@ -806,7 +815,8 @@ extension HomeView {
             onSelectVideo: onSelectVideo,
             onLongPressVideo: { menuItem = $0 },
             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) },
-            firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil
+            firstCardFocus: section.id == sections.first?.id ? $isFirstCardFocused : nil,
+            cardFocus: $focusedCardID
         )
         .onAppear { prefetchIfNeeded(from: section) }
     }
@@ -820,5 +830,64 @@ extension HomeView {
             onLongPressVideo: { menuItem = $0 },
             onNeedMoreItems: { prefetchItemsIfNeeded(in: section.id) }
         )
+    }
+}
+
+extension HomeView {
+    /// Takes away what the user just said they weren't interested in: the one card, or every
+    /// card from its channel.
+    ///
+    /// Only Home's own rows. The supplementary feeds are Subscriptions and History — what the
+    /// user follows and what they watched — and neither is a recommendation to take back.
+    ///
+    /// A channel's cards are matched by id where the card carries it and by name otherwise:
+    /// Home's tiles don't carry the channel.
+    fileprivate func remove(_ video: VideoItem, _ kind: VideoDismissal) {
+        let isGone: (VideoItem) -> Bool
+        switch kind {
+        case .video:
+            isGone = { $0.id == video.id }
+        case .channel:
+            isGone = { item in
+                if item.id == video.id { return true }
+                if let channelID = video.channelID, item.channelID == channelID { return true }
+                return !video.author.isEmpty && item.author == video.author
+            }
+        }
+        let neighbour = neighbour(of: video, keeping: { !isGone($0) })
+        // A row emptied by this would stand as a heading over nothing.
+        sections = sections.map { $0.removing(where: isGone) }.filter { !$0.items.isEmpty }
+        // The focused card is the one that went, and tvOS doesn't pick another: focus would be
+        // nowhere until the next press.
+        pendingCardFocus = neighbour
+    }
+
+    /// Puts focus on the card with this id, asking until it has it.
+    ///
+    /// Asked over and over, like the hand-off after a refresh: the menu's dialog is still on its
+    /// way out when the card goes, and while it holds focus a request is accepted and dropped.
+    /// A second and a half of tries, which outlasts the dialog's exit.
+    fileprivate func handFocus(to id: String?) async {
+        guard let id else { return }
+        focusedCardID = nil
+        for _ in 0..<15 where focusedCardID != id {
+            focusedCardID = id
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+        }
+        pendingCardFocus = nil
+    }
+
+    /// Where focus goes when `video` is taken away: the next card along its row that stays,
+    /// else the one before it, else the first that stays in a row below.
+    private func neighbour(of video: VideoItem, keeping stays: (VideoItem) -> Bool) -> String? {
+        guard let row = sections.firstIndex(where: { $0.items.contains { $0.id == video.id } }),
+            let index = sections[row].items.firstIndex(where: { $0.id == video.id })
+        else { return nil }
+        let items = sections[row].items
+        if let next = items[(index + 1)...].first(where: stays) ?? items[..<index].last(where: stays) {
+            return next.id
+        }
+        return sections[(row + 1)...].compactMap { $0.items.first(where: stays) }.first?.id
     }
 }

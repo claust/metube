@@ -39,6 +39,9 @@ struct VideoCard: View {
     /// news panel has somewhere definite to hand focus back to when it is dismissed; every
     /// other card is left to the focus engine.
     var externalFocus: FocusState<Bool>.Binding?
+    /// A screen-wide focus handle keyed by video id, for a screen that has to move focus to a
+    /// card it chooses — Home, onto a dismissed card's neighbour (see `HomeView.remove`).
+    var focusID: FocusState<String?>.Binding?
 
     @EnvironmentObject private var watchProgress: WatchProgressStore
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
@@ -141,6 +144,7 @@ struct VideoCard: View {
         .accessibilityLabel(accessibilityText)
         .focusEffectDisabled()
         .modifier(ExternalFocus(binding: externalFocus))
+        .modifier(IDFocus(binding: focusID, id: item.id))
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.08 : 1.0)
         .shadow(color: .black.opacity(isFocused ? 0.6 : 0), radius: 20)
@@ -526,6 +530,20 @@ private struct BareButtonStyle: ButtonStyle {
             .onChange(of: configuration.isPressed) { _, isPressed in
                 onPressingChanged?(isPressed)
             }
+    }
+}
+
+/// `ExternalFocus` for a handle shared by many cards, each answering to its own video id.
+private struct IDFocus: ViewModifier {
+    let binding: FocusState<String?>.Binding?
+    let id: String
+
+    func body(content: Content) -> some View {
+        if let binding {
+            content.focused(binding, equals: id)
+        } else {
+            content
+        }
     }
 }
 
