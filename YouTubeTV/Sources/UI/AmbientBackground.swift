@@ -289,7 +289,7 @@ struct AmbientPalette: Hashable, Sendable {
     /// Shrinks the image to a few hundred pixels and sorts them into coarse colour buckets. The
     /// background is the biggest bucket, favouring colour over grey and passing over the black
     /// bars a 4:3 thumbnail carries; the accent is the bucket with the most vivid colour at a
-    /// clearly different hue. A thumbnail with no second colour gets a brighter shade of its
+    /// clearly different hue. A picture with no second colour gets a brighter shade of its
     /// first as its accent.
     static func extract(from image: UIImage) -> AmbientPalette? {
         guard let pixels = image.cgImage.flatMap(samplePixels) else { return nil }
@@ -317,8 +317,11 @@ struct AmbientPalette: Hashable, Sendable {
                     hue: $0.hsb.hue, saturation: min($0.hsb.saturation, 0.85),
                     brightness: min(max($0.hsb.brightness, 0.6), 0.9))
             }
+            // A grey picture's hue means nothing (UIKit reports 0, red), so only a coloured
+            // background gets its saturation lifted; a grey one gets a lighter grey.
             ?? HSB(
-                hue: ground.hue, saturation: min(ground.saturation + 0.2, 0.8),
+                hue: ground.hue,
+                saturation: ground.saturation < 0.1 ? ground.saturation : min(ground.saturation + 0.2, 0.8),
                 brightness: 0.7)
 
         return AmbientPalette(
