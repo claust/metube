@@ -102,8 +102,11 @@ private struct SettingsRowLabel: View {
         ZStack(alignment: isOn ? .trailing : .leading) {
             Capsule()
                 .fill(isOn ? Color.green : Color.gray.opacity(0.5))
+            // A fixed size, so the stack's alignment can move it: left to fill the proposal, the
+            // circle would span the track and sit in the middle whichever way the switch is set.
             Circle()
                 .fill(.white)
+                .frame(width: 42, height: 42)
                 .padding(4)
         }
         .frame(width: 96, height: 50)

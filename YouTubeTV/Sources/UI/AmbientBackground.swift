@@ -29,9 +29,13 @@ struct AmbientHomeBackground: View {
     @AppStorage(AmbientBackgroundSetting.key)
     private var isEnabled = AmbientBackgroundSetting.defaultValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var channelAvatars: ChannelAvatarStore
     @EnvironmentObject private var videoChannels: VideoChannelStore
     @State private var change: PaletteChange?
+    /// True while `change` is still under way. Under Reduce Motion the blobs hold still, so once
+    /// the colours have arrived there is nothing left to redraw and the timeline can stop.
+    @State private var isBlending = false
 
     /// How long focus has to rest on a card before the background follows it. Holding a
     /// direction sweeps focus across a row, and a colour change per card passed over would be a
@@ -47,13 +51,34 @@ struct AmbientHomeBackground: View {
         ZStack {
             Color.black
             if isEnabled, let change {
-                AmbientBlobs(change: change, isPaused: !isFrontmost, isDrifting: !reduceMotion)
-                    .transition(.opacity)
+                AmbientBlobs(
+                    change: change,
+                    isPaused: !isFrontmost || (reduceMotion && !isBlending),
+                    isDrifting: !reduceMotion
+                )
+                .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.6), value: isEnabled)
         .ignoresSafeArea()
-        .task(id: isEnabled ? source : nil) { await follow(source) }
+        // Keyed on the scene phase too, like `RemoteImage`'s load: a picture whose download died
+        // with the app going to the background gets another try on the way back.
+        .task(id: Follow(source: isEnabled ? source : nil, scenePhase: scenePhase)) {
+            await follow(source)
+        }
+        .task(id: change) {
+            guard change != nil else { return }
+            isBlending = true
+            try? await Task.sleep(for: .seconds(PaletteChange.duration))
+            guard !Task.isCancelled else { return }
+            isBlending = false
+        }
+    }
+
+    /// What following focus is keyed on: change either and it starts over.
+    private struct Follow: Equatable {
+        let source: Source?
+        let scenePhase: ScenePhase
     }
 
     /// The picture to take colours from, and whether it is the channel's own. Changes when the
@@ -74,7 +99,8 @@ struct AmbientHomeBackground: View {
     @MainActor
     private func follow(_ source: Source?) async {
         guard isEnabled, let source else { return }
-        try? await Task.sleep(for: source.isChannelPicture ? Self.settleDelay : Self.settleDelay + Self.avatarGrace)
+        let wait = source.isChannelPicture ? Self.settleDelay : Self.settleDelay + Self.avatarGrace
+        try? await Task.sleep(for: wait)
         guard !Task.isCancelled else { return }
         let url = source.url
         let found = await AmbientPaletteCache.shared.palette(for: url)
@@ -101,7 +127,7 @@ private struct PaletteChange: Equatable {
     let start: Date
 
     /// Long enough that the change is felt rather than seen.
-    private static let duration: TimeInterval = 2.5
+    static let duration: TimeInterval = 2.5
 
     func colours(at date: Date) -> AmbientColours {
         let progress = min(max(date.timeIntervalSince(start) / Self.duration, 0), 1)
