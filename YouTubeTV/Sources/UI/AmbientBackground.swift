@@ -305,9 +305,15 @@ struct AmbientPalette: Hashable, Sendable {
             let background = colours.max(by: { $0.backgroundScore < $1.backgroundScore })
         else { return nil }
 
+        // A grey background has no hue to differ from — UIKit reports 0, red — so against one any
+        // vivid colour will do; otherwise a red logo on white would be turned away as too close.
+        let isGreyGround = background.hsb.saturation < greyLimit
         let accent =
             colours
-            .filter { $0.hsb.saturation > 0.25 && hueDistance($0.hsb.hue, background.hsb.hue) > 0.08 }
+            .filter {
+                $0.hsb.saturation > 0.25
+                    && (isGreyGround || hueDistance($0.hsb.hue, background.hsb.hue) > 0.08)
+            }
             .max(by: { $0.accentScore < $1.accentScore })
 
         let ground = background.hsb
@@ -321,7 +327,7 @@ struct AmbientPalette: Hashable, Sendable {
             // background gets its saturation lifted; a grey one gets a lighter grey.
             ?? HSB(
                 hue: ground.hue,
-                saturation: ground.saturation < 0.1 ? ground.saturation : min(ground.saturation + 0.2, 0.8),
+                saturation: isGreyGround ? ground.saturation : min(ground.saturation + 0.2, 0.8),
                 brightness: 0.7)
 
         return AmbientPalette(
@@ -330,6 +336,9 @@ struct AmbientPalette: Hashable, Sendable {
                 brightness: ground.brightness),
             accent: accentHSB)
     }
+
+    /// Below this saturation a colour counts as grey, and its hue as meaningless.
+    private static let greyLimit = 0.1
 
     private static func hueDistance(_ lhs: Double, _ rhs: Double) -> Double {
         let distance = abs(lhs - rhs)
