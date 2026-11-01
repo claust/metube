@@ -17,8 +17,8 @@ struct RootView: View {
     @State private var isAddingProfile = false
 
     /// Which of the left menu's screens is showing. Home is the feed the app has always opened
-    /// on, Subscriptions is the channel grid, History is what has been watched; Settings is still
-    /// an outline — see `MenuPlaceholderPage`.
+    /// on, Subscriptions is the channel grid, History is what has been watched, and Settings
+    /// is `SettingsView`.
     @State private var section: MenuSection = .home
 
     /// Bumped every time the menu picks a section. The screen it selects answers by taking
@@ -215,7 +215,7 @@ struct RootView: View {
                         onOpenChannel: openChannel
                     )
                 case .settings:
-                    MenuPlaceholderPage(section: section, focusRequest: focusRequest)
+                    SettingsView(focusRequest: focusRequest)
                 }
             }
             // Reading the menu against a screenful of bright thumbnails is otherwise a fight
