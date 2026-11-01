@@ -54,7 +54,8 @@ struct HomeView: View {
     @State private var menuRowID: String?
 
     /// Which of Home's own cards has focus, by `FeedRow.focusKey`. Only ever set to hand focus
-    /// to the card beside one that was just taken away — see `remove`.
+    /// to the card beside one that was just taken away — see `remove`; read by the background,
+    /// which takes its colours from the focused card — see `focusedVideo`.
     @FocusState private var focusedCardID: String?
     /// That card, while focus is still on its way to it.
     @State private var pendingCardFocus: String?
@@ -183,7 +184,7 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            AmbientHomeBackground(focusedVideo: focusedVideo, isFrontmost: isFrontmost)
 
             content
         }
@@ -778,6 +779,17 @@ extension HomeView {
     /// The rest of Home, drawn below the subscriptions row. This is what paging grows.
     var trailingSections: ArraySlice<FeedSection> {
         sections[leadSections.endIndex...]
+    }
+
+    /// The video on the card that has focus, for the background to take its colours from.
+    fileprivate var focusedVideo: VideoItem? {
+        guard let key = focusedCardID else { return nil }
+        for section in sections {
+            if let item = section.items.first(where: { FeedRow.focusKey(row: section.id, video: $0.id) == key }) {
+                return item
+            }
+        }
+        return nil
     }
 
     fileprivate func section(withID id: String) -> FeedSection? {

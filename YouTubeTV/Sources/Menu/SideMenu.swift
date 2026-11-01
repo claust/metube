@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// The screens the left-hand menu switches between. Home is the feed the app has always
-/// opened on, Subscriptions and History are screens of their own; Settings is still a
-/// prototype — see `MenuPlaceholderPage`.
+/// opened on, Subscriptions, History and Settings are screens of their own.
 enum MenuSection: String, CaseIterable, Identifiable {
     case home
     case subscriptions
