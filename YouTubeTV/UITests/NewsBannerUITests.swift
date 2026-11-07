@@ -21,12 +21,17 @@ final class NewsBannerUITests: XCTestCase {
         firstCard = app.focusedLabel
     }
 
-    /// Climbs from the feed to the ticker, which opens the reading panel.
-    private func openNews() throws {
+    /// Climbs from the feed towards the ticker, as far as focus will go.
+    private func climbToStrip() {
         for _ in 0..<6 {
             if app.focusedLabel == Self.stripLabel { return }
             RemoteDriver.press(.up)
         }
+    }
+
+    /// Opens the reading panel, skipping the test when there is no news to open.
+    private func openNews() throws {
+        climbToStrip()
         guard app.focusedLabel == Self.stripLabel else {
             throw XCTSkip("Never reached the news strip (no headlines?). Focus: \(app.focusedLabel ?? "nil").")
         }
@@ -62,6 +67,11 @@ final class NewsBannerUITests: XCTestCase {
         // Time for the article to arrive, or down has nothing to walk into.
         Thread.sleep(forTimeInterval: 3)
         RemoteDriver.press(.down, settle: 1)
+        // A story short enough to fit in one step has nowhere to walk to, so down leaves for the
+        // feed's cards, which are buttons. Headlines are live, so that can't be ruled out.
+        guard app.focusedLabel != Self.stripLabel, app.focusedElement?.elementType != .button else {
+            throw XCTSkip("This story has no article step to press Menu from.")
+        }
         RemoteDriver.press(.menu, settle: 0)
         assertLandsOnFirstCard()
     }
@@ -80,7 +90,9 @@ final class NewsBannerUITests: XCTestCase {
         try openNews()
         RemoteDriver.press(.menu, settle: 0)
         assertLandsOnFirstCard()
-        try openNews()
-        XCTAssertEqual(app.focusedLabel, Self.stripLabel)
+        // Not `openNews`: headlines are known to be there by now, so missing the strip is the
+        // failure this test is for, not a reason to skip.
+        climbToStrip()
+        XCTAssertEqual(app.focusedLabel, Self.stripLabel, "The strip never took focus again.")
     }
 }
