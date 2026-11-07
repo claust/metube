@@ -43,10 +43,7 @@ struct HomeView: View {
     /// screen's scroll view still so that scrolling the article doesn't scroll the feed too.
     @State private var isFeedScrollLocked = false
 
-    /// Focus handle for the very first video card. Set when the news panel is dismissed with
-    /// Menu, which is the one moment something other than the focus engine decides where focus
-    /// belongs: the user asked to leave the news, and the feed's first card is where they were
-    /// heading.
+    /// Focus handle for the very first video card, for the hand-off after a refresh.
     @FocusState private var isFirstCardFocused: Bool
 
     /// The row the open menu's card is in. Home lets a video into two shelves, so the video
@@ -95,10 +92,6 @@ struct HomeView: View {
     /// So for as long as the banner is in use the menu stops being a place focus can go, and left
     /// off the first headline wraps round to the last instead of opening the menu.
     @State private var isNewsActive = false
-
-    /// True between Menu being pressed in the news panel and focus arriving on the first card.
-    /// Drives the handoff below.
-    @State private var isHandingBackFocus = false
 
     /// True between the "new videos" button being pressed and focus arriving back on the feed.
     ///
@@ -211,21 +204,8 @@ struct HomeView: View {
                 await loadHeadlinesIfStale()
             }
         }
-        // Focus back to the feed a beat after Menu, once the banner has let go and the first
-        // shelf is on screen and built again — asking any sooner finds no card to focus.
-        //
-        // Held by the view rather than by a detached `Task` so it dies with Home, and re-checked
-        // on the way out: 120ms is long enough for the user to have gone straight back up into
-        // the ticker, and this must not then yank them out of it.
-        .task(id: isHandingBackFocus) {
-            guard isHandingBackFocus else { return }
-            try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled else { return }
-            if !isNewsActive { isFirstCardFocused = true }
-            isHandingBackFocus = false
-        }
-        // Same handoff after a refresh, and for the same reason: the first shelf has just been
-        // rebuilt from a different page, so there is nothing to focus until it has laid out.
+        // Focus back to the feed after a refresh: the first shelf has just been rebuilt from a
+        // different page, so there is nothing to focus until it has laid out.
         //
         // Asked over and over until the card confirms it has focus, rather than once after a
         // fixed beat. There is no telling how long the rebuilt shelf takes to lay out, and a
@@ -309,7 +289,11 @@ struct HomeView: View {
                             isNewsActive = $0
                             onNewsActiveChange($0)
                         },
-                        onDismiss: { isHandingBackFocus = true },
+                        // Asked for until the card has it, with the strip kept out meanwhile:
+                        // the shelf is only coming back as the panel collapses, and a request
+                        // dropped before then leaves focus on nothing, which tvOS answers by
+                        // handing it to the strip — reopening the story just closed.
+                        onDismiss: { pendingCardFocus = firstCardKey },
                         // Also kept out while a dismissed card's neighbour is being focused:
                         // focus is on nothing then, and tvOS hands it to the topmost view.
                         canTakeFocus: !isApplyingRefresh && pendingCardFocus == nil
@@ -779,6 +763,12 @@ extension HomeView {
     /// The rest of Home, drawn below the subscriptions row. This is what paging grows.
     var trailingSections: ArraySlice<FeedSection> {
         sections[leadSections.endIndex...]
+    }
+
+    /// The feed's first card, as a `FeedRow.focusKey`: where leaving the news lands.
+    fileprivate var firstCardKey: String? {
+        guard let section = sections.first, let item = section.items.first else { return nil }
+        return FeedRow.focusKey(row: section.id, video: item.id)
     }
 
     /// The video on the card that has focus, for the background to take its colours from.
