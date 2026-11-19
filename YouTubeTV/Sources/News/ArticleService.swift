@@ -215,48 +215,52 @@ struct ArticleService {
                 as? [[String: Any]]
         else { return [] }
 
-        var collected: [ArticleBlock] = []
-        func add(_ value: Any?, kind: ArticleBlock.Kind = .paragraph, bullet: Bool = false) {
-            guard let string = value as? String else { return }
-            let text = plainText(fromYText: string)
-            guard !text.isEmpty else { return }
-            collected.append(ArticleBlock(kind: kind, text: bullet ? "• \(text)" : text))
-        }
-        func addItems(_ value: Any?) {
-            (value as? [Any])?.forEach { add($0, bullet: true) }
-        }
-
         let standfirst = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        for entry in entries {
-            switch entry["kind"] as? String {
-            case "lead":
-                // The standfirst, which the feed gave as the summary and the panel already shows
-                // beside the article. Kept only when the feed had none.
-                let lead = entry["text"] as? String
-                if lead?.trimmingCharacters(in: .whitespacesAndNewlines) != standfirst { add(lead) }
-            case "paragraph":
-                add(entry["text"])
-            case "headline":
-                add(entry["text"], kind: .subheading)
-            case "bulletlist":
-                addItems(entry["items"])
-            case "bulletpoints":
-                // The "Hvad sker der?" box that opens most stories.
-                let box = entry["bulletpoints"] as? [String: Any]
-                add(box?["title"], kind: .subheading)
-                addItems(box?["list"])
-            case "factbox":
-                let box = entry["factbox"] as? [String: Any]
-                add(box?["title"], kind: .subheading)
-                for list in box?["lists"] as? [[String: Any]] ?? [] {
-                    add(list["title"])
-                    addItems(list["items"])
-                }
-            default:
-                break
-            }
+        return entries.flatMap { yBlocks(in: $0, standfirst: standfirst) }
+    }
+
+    /// What one entry of a y.dk article's `blocks` contributes to the body.
+    private static func yBlocks(in entry: [String: Any], standfirst: String) -> [ArticleBlock] {
+        switch entry["kind"] as? String {
+        case "lead":
+            // The standfirst, which the feed gave as the summary and the panel already shows
+            // beside the article. Kept only when the feed had none.
+            let lead = entry["text"] as? String
+            let repeatsFeed = lead?.trimmingCharacters(in: .whitespacesAndNewlines) == standfirst
+            return repeatsFeed ? [] : yText(lead)
+        case "paragraph":
+            return yText(entry["text"])
+        case "headline":
+            return yText(entry["text"], kind: .subheading)
+        case "bulletlist":
+            return yItems(entry["items"])
+        case "bulletpoints":
+            // The "Hvad sker der?" box that opens most stories.
+            let box = entry["bulletpoints"] as? [String: Any]
+            return yText(box?["title"], kind: .subheading) + yItems(box?["list"])
+        case "factbox":
+            let box = entry["factbox"] as? [String: Any]
+            let lists = box?["lists"] as? [[String: Any]] ?? []
+            return yText(box?["title"], kind: .subheading)
+                + lists.flatMap { yText($0["title"]) + yItems($0["items"]) }
+        default:
+            return []
         }
-        return collected
+    }
+
+    /// One block for a string of y.dk text, or none when it isn't a string or is empty.
+    private static func yText(
+        _ value: Any?, kind: ArticleBlock.Kind = .paragraph, bullet: Bool = false
+    ) -> [ArticleBlock] {
+        guard let string = value as? String else { return [] }
+        let text = plainText(fromYText: string)
+        guard !text.isEmpty else { return [] }
+        return [ArticleBlock(kind: kind, text: bullet ? "• \(text)" : text)]
+    }
+
+    /// A y.dk list as one bulleted paragraph per item.
+    private static func yItems(_ value: Any?) -> [ArticleBlock] {
+        (value as? [Any] ?? []).flatMap { yText($0, bullet: true) }
     }
 
     /// A y.dk block's text without the light markup it is written in: `*emphasis*` and
