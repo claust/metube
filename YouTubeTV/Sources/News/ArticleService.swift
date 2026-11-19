@@ -215,7 +215,7 @@ struct ArticleService {
                 as? [[String: Any]]
         else { return [] }
 
-        let standfirst = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let standfirst = plainText(fromYText: summary)
         return entries.flatMap { yBlocks(in: $0, standfirst: standfirst) }
     }
 
@@ -224,10 +224,10 @@ struct ArticleService {
         switch entry["kind"] as? String {
         case "lead":
             // The standfirst, which the feed gave as the summary and the panel already shows
-            // beside the article. Kept only when the feed had none.
-            let lead = entry["text"] as? String
-            let repeatsFeed = lead?.trimmingCharacters(in: .whitespacesAndNewlines) == standfirst
-            return repeatsFeed ? [] : yText(lead)
+            // beside the article. Kept only when the feed had none. Compared as the text both
+            // show, so emphasis in one and not the other doesn't make them look different.
+            let lead = yText(entry["text"])
+            return lead.first?.text == standfirst ? [] : lead
         case "paragraph":
             return yText(entry["text"])
         case "headline":
