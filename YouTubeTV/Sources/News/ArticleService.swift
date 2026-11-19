@@ -5,7 +5,7 @@ import Foundation
 /// The RSS feed carries a headline and one sentence of standfirst — the story itself is only on
 /// the article page, so reading it means fetching that page and pulling the text back out of it.
 /// There is no API for this; each outlet's reader below follows what its pages happen to be
-/// built from, and either can change under us without warning. Every failure mode therefore ends the same way: an empty
+/// built from, and any of them can change under us without warning. Every failure mode therefore ends the same way: an empty
 /// result, and the caller falls back to the summary the feed gave it.
 /// One piece of an article's body.
 struct ArticleBlock: Hashable {
@@ -59,6 +59,7 @@ struct ArticleService {
             switch item.source {
             case .bbc: blocks = Self.body(inPageHTML: html, headline: item.title)
             case .dr: blocks = Self.body(inDRPageHTML: html, focusID: Self.drFocusID(in: link))
+            case .y: blocks = Self.body(inYPageHTML: html, summary: item.summary)
             }
             article = Article(blocks: blocks, imageURL: Self.shareImageURL(inPageHTML: html))
         } catch {
@@ -190,6 +191,86 @@ struct ArticleService {
             let text = plainText(fromHTML: String(match.output.1))
             return text.isEmpty ? nil : ArticleBlock(kind: .paragraph, text: text)
         }
+    }
+
+    /// Where a y.dk page's data holds the article: the one `blocks` array whose entries have a
+    /// `kind`. The front-page layout that every page also carries has a `blocks` of its own.
+    private static let yBodyMarker = #""blocks":[{"kind":"#
+
+    /// Pulls the article out of a y.dk page.
+    ///
+    /// The page is a Next.js app like DR's, and the article arrives in its data as typed blocks:
+    /// `{"kind":"paragraph","text":"…"}`, `headline`, lists and boxes. Read from there, as with
+    /// BBC, rather than from the markup. Wire stories are here too, which the site's RSS and
+    /// `llms-full.txt` both leave out.
+    ///
+    /// A list item becomes a paragraph behind a bullet, and a box its title and then its items.
+    /// Pictures and embedded posts are skipped, and so is any kind this doesn't know.
+    static func body(inYPageHTML html: String, summary: String = "") -> [ArticleBlock] {
+        let data = DRLatestNewsParser.pageData(in: html)
+        guard let marker = data.range(of: yBodyMarker),
+            let open = data[marker.lowerBound...].firstIndex(of: "["),
+            let array = DRLatestNewsParser.balancedJSON(from: data[open...]),
+            let entries = try? JSONSerialization.jsonObject(with: Data(array.utf8))
+                as? [[String: Any]]
+        else { return [] }
+
+        let standfirst = plainText(fromYText: summary)
+        return entries.flatMap { yBlocks(in: $0, standfirst: standfirst) }
+    }
+
+    /// What one entry of a y.dk article's `blocks` contributes to the body.
+    private static func yBlocks(in entry: [String: Any], standfirst: String) -> [ArticleBlock] {
+        switch entry["kind"] as? String {
+        case "lead":
+            // The standfirst, which the feed gave as the summary and the panel already shows
+            // beside the article. Kept only when the feed had none. Compared as the text both
+            // show, so emphasis in one and not the other doesn't make them look different.
+            let lead = yText(entry["text"])
+            return lead.first?.text == standfirst ? [] : lead
+        case "paragraph":
+            return yText(entry["text"])
+        case "headline":
+            return yText(entry["text"], kind: .subheading)
+        case "bulletlist":
+            return yItems(entry["items"])
+        case "bulletpoints":
+            // The "Hvad sker der?" box that opens most stories.
+            let box = entry["bulletpoints"] as? [String: Any]
+            return yText(box?["title"], kind: .subheading) + yItems(box?["list"])
+        case "factbox":
+            let box = entry["factbox"] as? [String: Any]
+            let lists = box?["lists"] as? [[String: Any]] ?? []
+            return yText(box?["title"], kind: .subheading)
+                + lists.flatMap { yText($0["title"]) + yItems($0["items"]) }
+        default:
+            return []
+        }
+    }
+
+    /// One block for a string of y.dk text, or none when it isn't a string or is empty.
+    private static func yText(
+        _ value: Any?, kind: ArticleBlock.Kind = .paragraph, bullet: Bool = false
+    ) -> [ArticleBlock] {
+        guard let string = value as? String else { return [] }
+        let text = plainText(fromYText: string)
+        guard !text.isEmpty else { return [] }
+        return [ArticleBlock(kind: kind, text: bullet ? "• \(text)" : text)]
+    }
+
+    /// A y.dk list as one bulleted paragraph per item.
+    private static func yItems(_ value: Any?) -> [ArticleBlock] {
+        (value as? [Any] ?? []).flatMap { yText($0, bullet: true) }
+    }
+
+    /// A y.dk block's text without the light markup it is written in: `*emphasis*` and
+    /// `**strong**`, and the `:::` that opens the name a quote is attributed to. The panel sets
+    /// text plainly, so left in they would show as asterisks and colons.
+    private static func plainText(fromYText text: String) -> String {
+        text
+            .replacingOccurrences(of: #"\*{1,2}([^*\n]+)\*{1,2}"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "^:::", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// A fragment of markup as the text it shows: tags dropped — links inside a paragraph keep

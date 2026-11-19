@@ -8,6 +8,7 @@ import Foundation
 enum NewsSource: String, CaseIterable, Identifiable, Hashable {
     case bbc
     case dr
+    case y
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum NewsSource: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .bbc: return "BBC NEWS"
         case .dr: return "DR NYHEDER"
+        case .y: return "Y.DK"
         }
     }
 
@@ -29,26 +31,35 @@ enum NewsSource: String, CaseIterable, Identifiable, Hashable {
     /// `allenyheder` — is only DR's "Kort nyt" briefs plus sport, mostly without pictures, so
     /// the banner showed a different set of stories from the page people know. The page is the
     /// real timeline across every section, and embeds it as data with a picture per story.
+    ///
+    /// y.dk's RSS feed, which its pages advertise: headline, standfirst and a picture for its
+    /// own stories, and a bare headline for the wire stories it carries. Chosen over the
+    /// `llms-full.txt` the site also publishes, which has the same stories as text five times
+    /// the size and no pictures.
     var feedURL: URL {
         switch self {
         case .bbc: return URL(string: "https://feeds.bbci.co.uk/news/rss.xml")!
         case .dr: return URL(string: "https://www.dr.dk/nyheder/seneste")!
+        case .y: return URL(string: "https://y.dk/rss")!
         }
     }
 
-    /// The first path segment of the outlet's sport pages. Neither feed carries a `<category>`,
-    /// but both file every story under its section, so the link says what the story is about.
-    private var sportSection: String {
+    /// The first path segment of the outlet's sport pages. No feed carries a `<category>`, but
+    /// BBC and DR file every story under its section, so the link says what the story is about.
+    /// y.dk serves every story from the site root, so nothing in its feed tells sport from news.
+    private var sportSection: String? {
         switch self {
         case .bbc: return "sport"
         case .dr: return "sporten"
+        case .y: return nil
         }
     }
 
     /// Whether a story's link is to the outlet's sport section — kept off the banner, which is
     /// for the news.
     func isSport(_ link: URL?) -> Bool {
-        link?.pathComponents.dropFirst().first == sportSection
+        guard let sportSection else { return false }
+        return link?.pathComponents.dropFirst().first == sportSection
     }
 }
 
