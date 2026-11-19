@@ -268,8 +268,7 @@ struct ArticleService {
     /// text plainly, so left in they would show as asterisks and colons.
     private static func plainText(fromYText text: String) -> String {
         text
-            .replacingOccurrences(
-                of: #"\*{1,2}([^*\n]+)\*{1,2}"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"\*{1,2}([^*\n]+)\*{1,2}"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: "^:::", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
