@@ -35,7 +35,7 @@ struct NewsService {
         // The feed is refetched on a schedule, and a cached body is exactly as good as a fresh
         // one within the feed's own `<ttl>`. Left on the default policy so URLSession honours it.
         switch source {
-        case .bbc:
+        case .bbc, .y:
             request.setValue("application/rss+xml, application/xml", forHTTPHeaderField: "Accept")
         case .dr:
             // A page, not a feed — and served whole only to a browser, like the article pages.
@@ -47,7 +47,7 @@ struct NewsService {
         }
         let parsed: [NewsItem]
         switch source {
-        case .bbc: parsed = RSSFeedParser(source: source).parse(data)
+        case .bbc, .y: parsed = RSSFeedParser(source: source).parse(data)
         case .dr: parsed = String(bytes: data, encoding: .utf8).map(DRLatestNewsParser.items) ?? []
         }
         // Sport is dropped before the cut rather than after, so an evening of match reports
@@ -72,7 +72,7 @@ enum NewsError: LocalizedError {
 ///
 /// A hand-rolled `XMLParser` delegate rather than a dependency: the feed is four elements deep
 /// and this is the whole of it. Text arrives as CDATA in BBC's feed and as plain characters in
-/// others, so both callbacks append to the same buffer.
+/// y.dk's, so both callbacks append to the same buffer.
 private final class RSSFeedParser: NSObject, XMLParserDelegate {
     private let source: NewsSource
 
@@ -275,7 +275,8 @@ enum DRLatestNewsParser {
     }
 
     /// The data a DR page streams in for Next.js: every `self.__next_f.push([1,"…"])` string,
-    /// decoded and joined. Also what `ArticleService` reads a live blog's posts from.
+    /// decoded and joined. Also what `ArticleService` reads a live blog's posts from, and y.dk's
+    /// articles: its pages are built the same way.
     ///
     /// All of them rather than the one holding whatever is being looked for: the data can be
     /// split across several pushes, and a split may fall anywhere — mid-array, mid-string.
@@ -291,7 +292,7 @@ enum DRLatestNewsParser {
     /// The JSON array that opens at the start of `text` — which must begin with its `[` — cut at
     /// the bracket that closes it. The tree goes on after it in a format of its own, so the decoder can't simply
     /// be pointed at the rest; brackets inside strings don't count.
-    private static func balancedJSON(from text: Substring) -> Substring? {
+    static func balancedJSON(from text: Substring) -> Substring? {
         var depth = 0
         var inString = false
         var isEscaped = false
